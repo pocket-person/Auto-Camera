@@ -11,8 +11,10 @@ local IN_RAID = false
 local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
 local cameraZoomInKey1, cameraZoomInKey2, cameraZoomOutKey1, cameraZoomOutKey2
-local previousCameraZoom = GetCameraZoom()
-local deltaTime = 0.1
+local previousZoomVelocity
+local previousCameraZoom
+local estimatedDeltaTime = 0.1
+local previousTime = nil
 local previousSettings = {general = nil, actionCam = nil, actionCamGroups = {}} -- stores the previous settings when defaults are applied by the user
 local playerRace = UnitRace("player")
 local maxZoomDistance = 50
@@ -38,6 +40,9 @@ local unitClassificationMaxDistance = {
         max = 2
     }
 }
+
+-- the expected current zoom distance based on the previous tick's zoom distance, the applied zoom velocity, and the time elapsed (z' = z + vt). This is used to detect when the user manually zooms.
+local expectedZoomTolerance = 1
 
 local function logFrameCamPosZToWorldZoom(z)
     return ((math.log(z - 0.2)/math.log(10)) * 4) + 5.5
@@ -77,7 +82,7 @@ BINDING_NAME_TOGGLE_STAND_BY = "Toggle Auto-Zoom"
 -- BINDING_NAME_ENTER_STAND_BY = "Pause Auto-Zoom"
 
 function addon:OnEnable()
-    self:ScheduleRepeatingTimer("autoZoom", 0.1)
+    self:ScheduleRepeatingTimer("autoZoom", estimatedDeltaTime)
 end
 
 function addon:isRunning() 
@@ -169,6 +174,7 @@ function setAdjustment(frame, adjustment)
 end
 
 function addon:autoZoom()
+    local deltaTime
     if (not addon:isRunning()) then
         if (not STAND_BY_BEHAVIOR_HANDLED) then
             MoveViewInStop()
@@ -199,8 +205,27 @@ function addon:autoZoom()
         return
     end
 
-    local targetZoom
     local currentCameraZoom = GetCameraZoom()
+
+    local expectedZoom
+    if (previousTime ~= nil) then deltaTime = GetTime() - previousTime end
+    if (previousZoomVelocity ~= nil and previousCameraZoom ~= nil and deltaTime ~= nil) then expectedZoom = previousCameraZoom + (previousZoomVelocity * deltaTime) end
+    
+    -- if camera has been moved by something other than autocamera (e.g. player zoom input)
+    if (expectedZoom ~= nil and abs(currentCameraZoom - expectedZoom) > expectedZoomTolerance) then
+        -- print('---')
+        -- print('current', currentCameraZoom)
+        -- print('expected', expectedZoom)
+        -- print('diff', abs(currentCameraZoom - expectedZoom))
+        -- enter standby and don't zoom
+        -- addon:enterStandBy()
+        -- MoveViewInStop()
+        -- MoveViewOutStop()
+        -- STAND_BY_BEHAVIOR_HANDLED = true -- todo> probably a better way to handle this (maybe stop function)
+        -- return
+    end
+
+    local targetZoom
     local unit
     local enemyCount = 0
     local currentSpeed, runSpeed, flightSpeed, swimSpeed = GetUnitSpeed("player")
@@ -262,24 +287,27 @@ function addon:autoZoom()
     targetZoom = targetZoom + units[1].distance
 
     local distanceDiff = targetZoom - currentCameraZoom
+
+    previousCameraZoom = GetCameraZoom()
+    previousTime = GetTime()
     
     -- todo fix over-zoom bug
     if (abs(distanceDiff) > 0.1) then
-        local cameraZoomSpeed = distanceDiff / tonumber(GetCVar("cameraZoomSpeed"))
-        if (cameraZoomSpeed < 0) then cameraZoomSpeed = cameraZoomSpeed * -1 end
+        local zoomSpeed = distanceDiff / tonumber(GetCVar("cameraZoomSpeed"))
+        if (zoomSpeed < 0) then zoomSpeed = zoomSpeed * -1 end
         if (distanceDiff > 0) then
             MoveViewInStart(0)
-            MoveViewOutStart(cameraZoomSpeed)
+            MoveViewOutStart(zoomSpeed)
+            previousZoomVelocity = zoomSpeed
         else
             MoveViewOutStart(0)
-            MoveViewInStart(cameraZoomSpeed)
+            MoveViewInStart(zoomSpeed)
+            previousZoomVelocity = -1 * zoomSpeed
         end
     else
         MoveViewInStop()
         MoveViewOutStop()
     end
-
-    previousCameraZoom = currentCameraZoom
 end
 
 function addon:applyActionCamSettings() 
@@ -1027,6 +1055,8 @@ function addon:ADDON_LOADED()
         self:Hide()
     end)
     T.playerModelFrame:RegisterUnitEvent("UNIT_PORTRAIT_UPDATE", "player")
+
+    expectedZoom = GetCameraZoom()
 
     if (not STAND_BY) then
         addon:autoZoom()
