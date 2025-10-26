@@ -2,8 +2,5 @@
  	<Binding name="TOGGLE_STAND_BY" header="AUTO_CAMERA" category="ADDONS">
 		AutoCamera:toggleStandBy()
  	</Binding>
- 	<!-- <Binding name="PAUSE_AUTO_ZOOM" category="ADDONS">
-		AutoCamera:enterStandBy()
- 	</Binding> -->
 </Bindings>
  

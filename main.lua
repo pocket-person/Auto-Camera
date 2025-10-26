@@ -498,7 +498,7 @@ function addon:options()
                                 desc = 'Multiplier for additional zoom distance based on player speed',
                                 min = 0,
                                 max = 0.5,
-                                step = 0.1,
+                                step = 0.01,
                                 order = 2
                             },
                             bossEnemyDistance = T.merge(distanceOption(), {
