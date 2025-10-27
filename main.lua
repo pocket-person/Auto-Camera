@@ -39,6 +39,10 @@ local unitClassificationMaxDistance = {
     }
 }
 
+-- debug flags
+local SHOW_MOUNT_FRAME = false
+local SHOW_CHARACTER_FRAME = false
+
 local function logFrameCamPosZToWorldZoom(z)
     return ((math.log(z - 0.2)/math.log(10)) * 4) + 5.5
 end
@@ -57,9 +61,51 @@ local function getCharacterZoomDefault()
     -- use best-fit curve function to estimate zoom distance based on model frame default camera position
     T.playerModelFrame:Show()
     local distance = linearFrameCamPosToWorldZoom(T.playerModelFrame:GetCameraPosition())
-    T.playerModelFrame:Hide()
-
+    if not SHOW_CHARACTER_FRAME then
+        T.playerModelFrame:Hide()
+    end
     -- if frame camera distance is 0
+    if (distance == baseZoomDistance) then distance = distance + 10 end
+
+    return distance
+end
+
+local function GetCurrentMountId()
+    local mountIDs = C_MountJournal.GetMountIDs()
+    for _, mountID in ipairs(mountIDs) do
+        local _, _, _, isActive = C_MountJournal.GetMountInfoByID(mountID)
+        if isActive then
+            return mountID
+        end
+    end
+    return nil
+end
+
+-- uses DressUpModel to display the mount and get its camera position
+local function getMountZoomDefault()
+    local displayID
+    local mountID = GetCurrentMountId()
+    if mountID then
+        local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountID)
+        if creatureDisplayInfoID then
+            displayID = creatureDisplayInfoID
+        end
+    end
+    -- Fallback to previous hardcoded value if not found
+    if not displayID then
+        displayID = 30720
+    end
+    T.playerMountModelFrame:Show()
+    T.playerMountModelFrame:ClearModel()
+        T.playerMountModelFrame:SetDisplayInfo(displayID)
+
+    local x, y, z = T.playerMountModelFrame:GetCameraPosition()
+    local distance = linearFrameCamPosToWorldZoom(x, y, z)
+
+    if not SHOW_MOUNT_FRAME then
+        T.playerMountModelFrame:Hide()
+    end
+
     if (distance == baseZoomDistance) then distance = distance + 10 end
 
     return distance
@@ -209,14 +255,10 @@ function addon:autoZoom()
 
     local prevTargetZoom = targetZoom
     
-    targetZoom = getAdjustment(T.playerModelFrame) or getCharacterZoomDefault()
-    
-    if (
-        AuraUtil.FindAuraByName("Running Wild", "player") == nil and
-        (IsMounted("player") or (UnitInVehicle and UnitInVehicle("player"))) and
-        settings.general.ridingDistance > targetZoom
-    ) then
-        targetZoom = settings.general.ridingDistance
+    if (AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player")) then
+        targetZoom = getAdjustment(T.playerMountModelFrame) or getMountZoomDefault()
+    else
+        targetZoom = getAdjustment(T.playerModelFrame) or getCharacterZoomDefault()
     end
 
     targetZoom = targetZoom + currentSpeed * settings.general.speedMultiplier
@@ -236,6 +278,7 @@ function addon:autoZoom()
                 unit.distance = settings.general.bossEnemyDistance
             else
                 unit.frame:Show()
+                unit.frame:ClearModel()
                 unit.frame:SetUnit(unit.name)
                 unit.distance = linearFrameCamPosToWorldZoom(unit.frame:GetCameraPosition())
                 unit.frame:Hide()
@@ -919,12 +962,15 @@ SlashCmdList["AC"] = function(arg)
         SettingsPanel:Open()
         InterfaceOptionsFrame_OpenToCategory("Auto-Camera")
     elseif (arg == "debug") then
+    print("Current Mount ID:", GetCurrentMountId())
+
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
-        print("target class", UnitClassification("target"))
-        print("target pos", x,y,z)
-        local x, y, z = T.playerModelFrame:GetCameraPosition()
-        print("player pos", x,y,z)
+
+        -- print("target class", UnitClassification("target"))
+        -- print("target pos", x,y,z)
+        -- local x, y, z = T.playerModelFrame:GetCameraPosition()
+        -- print("player pos", x,y,z)
 
         -- local data2d = {x = x, z = z, y = y, mag = mag}
 
@@ -1010,10 +1056,30 @@ function addon:BARBER_SHOP_CLOSE()
     end
 end
 
-function addon:ADDON_LOADED()
+function addon:ADDON_LOADED(_, loadedAddonName)
+    if loadedAddonName ~= addonName then return end
     T.playerModelFrame = CreateFrame("PlayerModel", nil, UIParent)
     T.playerModelFrame:SetUnit("player")
-    T.playerModelFrame:Hide()
+    T.playerModelFrame:SetSize(300, 300)
+    T.playerModelFrame:ClearAllPoints()
+    T.playerModelFrame:SetPoint("CENTER", UIParent, "CENTER", -200, 0)
+    T.playerModelFrame:SetFrameStrata("HIGH")
+    if not SHOW_CHARACTER_FRAME then
+        T.playerModelFrame:Hide()
+    else
+        T.playerModelFrame:Show()
+    end
+
+    T.playerMountModelFrame = CreateFrame("DressUpModel", nil, UIParent)
+    T.playerMountModelFrame:SetSize(300, 300)
+    T.playerMountModelFrame:ClearAllPoints()
+    T.playerMountModelFrame:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
+    T.playerMountModelFrame:SetFrameStrata("HIGH")
+    if not SHOW_MOUNT_FRAME then
+        T.playerMountModelFrame:Hide()
+    else
+        T.playerMountModelFrame:Show()
+    end
 
     for _, unit in pairs(units) do
         unit.frame = CreateFrame("PlayerModel", nil, UIParent)
@@ -1023,8 +1089,11 @@ function addon:ADDON_LOADED()
     -- todo> playerModelFrame:RefreshUnit() -- https://www.wowinterface.com/forums/showthread.php?t=48394
     T.playerModelFrame:SetScript("OnEvent", function(self)
         self:Show()
+        self:ClearModel()
         self:SetUnit("player")
-        self:Hide()
+        if (not SHOW_CHARACTER_FRAME) then
+            self:Hide()
+        end
     end)
     T.playerModelFrame:RegisterUnitEvent("UNIT_PORTRAIT_UPDATE", "player")
 
