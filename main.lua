@@ -12,6 +12,9 @@ local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
 local cameraZoomInKey1, cameraZoomInKey2, cameraZoomOutKey1, cameraZoomOutKey2
 local previousCameraZoom = GetCameraZoom()
+local previousPosition = nil
+local previousTime = nil
+local previousSpeed = 0
 local deltaTime = 0.1
 local previousSettings = {general = nil, actionCam = nil, actionCamGroups = {}} -- stores the previous settings when defaults are applied by the user
 local playerRace = UnitRace("player")
@@ -79,6 +82,55 @@ local function GetCurrentMountId()
         end
     end
     return nil
+end
+
+-- Returns derived speed using map coordinates and time
+local function GetDerivedSpeed()
+    local mapId = C_Map.GetBestMapForUnit("player")
+    local currentSpeed = 0
+    local currentTime = GetTime()
+    local currentPosition = nil
+    local mapWidth, mapHeight = nil, nil
+    if mapId then
+        local pos = C_Map.GetPlayerMapPosition(mapId, "player")
+        if pos then
+            local x, y = pos:GetXY()
+            currentPosition = {x = x, y = y}
+        end
+        -- Get map size in yards
+        if C_Map.GetMapWorldSize then
+            local size = C_Map.GetMapWorldSize(mapId)
+            if type(size) == "number" then
+                mapWidth, mapHeight = size, size
+            elseif type(size) == "table" then
+                mapWidth, mapHeight = size[1], size[2]
+            end
+        end
+    end
+
+    if previousPosition and previousTime and currentPosition and mapWidth and mapHeight then
+        local dx = (currentPosition.x - previousPosition.x) * mapWidth
+        local dy = (currentPosition.y - previousPosition.y) * mapHeight
+        local distance = math.sqrt(dx * dx + dy * dy)
+        local elapsed = currentTime - previousTime
+        if elapsed > 0 then
+            currentSpeed = distance / elapsed -- yards per second
+        end
+    end
+
+    previousTime = currentTime
+    previousPosition = currentPosition
+    if (currentSpeed < 50) then
+        previousSpeed = currentSpeed
+
+        if (currentSpeed == 0) then
+            return GetUnitSpeed("player")
+        end
+        return currentSpeed
+    else
+        -- filter out spikes due to things like map changes and teleports
+        return previousSpeed
+    end
 end
 
 -- uses DressUpModel to display the mount and get its camera position
@@ -249,7 +301,6 @@ function addon:autoZoom()
     local currentCameraZoom = GetCameraZoom()
     local unit
     local enemyCount = 0
-    local currentSpeed, runSpeed, flightSpeed, swimSpeed = GetUnitSpeed("player")
 
     STAND_BY_BEHAVIOR_HANDLED = false
 
@@ -261,7 +312,9 @@ function addon:autoZoom()
         targetZoom = getAdjustment(T.playerModelFrame) or getCharacterZoomDefault()
     end
 
-    targetZoom = targetZoom + currentSpeed * settings.general.speedMultiplier
+    if (settings.general.speedMultiplier > 0) then
+        targetZoom = targetZoom + GetDerivedSpeed() * settings.general.speedMultiplier
+    end
 
     for _, unit in pairs(units) do
         local unitClassification = UnitClassification(unit.name)
@@ -962,7 +1015,7 @@ SlashCmdList["AC"] = function(arg)
         SettingsPanel:Open()
         InterfaceOptionsFrame_OpenToCategory("Auto-Camera")
     elseif (arg == "debug") then
-    print("Current Mount ID:", GetCurrentMountId())
+    print("Mount Zoom Default:", getMountZoomDefault())
 
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
