@@ -5,6 +5,7 @@ local baseZoomDistance = 0.5
 local modelZoomMultiplier = 1.7
 local STAND_BY = false
 local IN_PET_BATTLE = false
+local HAS_CLIMBING_GEAR = false
 local IN_ENCOUNTER = false
 local IN_BARBER_SHOP = false
 local IN_RAID = false
@@ -135,31 +136,9 @@ end
 
 -- uses DressUpModel to display the mount and get its camera position
 local function getMountZoomDefault()
-    local displayID
-    local mountID = GetCurrentMountId()
-    if mountID then
-        local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountID)
-        if creatureDisplayInfoID then
-            displayID = creatureDisplayInfoID
-        end
-    end
-    -- Fallback to previous hardcoded value if not found
-    if not displayID then
-        displayID = 30720
-    end
-    T.playerMountModelFrame:Show()
-    T.playerMountModelFrame:ClearModel()
-        T.playerMountModelFrame:SetDisplayInfo(displayID)
-
     local x, y, z = T.playerMountModelFrame:GetCameraPosition()
     local distance = linearFrameCamPosToWorldZoom(x, y, z)
-
-    if not SHOW_MOUNT_FRAME then
-        T.playerMountModelFrame:Hide()
-    end
-
     if (distance == baseZoomDistance) then distance = distance + 10 end
-
     return distance
 end
 
@@ -183,7 +162,8 @@ function addon:isRunning()
         not STAND_BY and
         not IN_ENCOUNTER and
         not IN_PET_BATTLE and
-        not IN_BARBER_SHOP
+        not IN_BARBER_SHOP and
+        not HAS_CLIMBING_GEAR
 end
 
 function addon:loadSettings()
@@ -243,10 +223,12 @@ function addon:toggleStandBy()
 end
 
 function addon:enterStandBy()
+    print("Entering Stand-By Mode")
     STAND_BY = true
 end
 
 function addon:exitStandBy()
+    print("Exiting Stand-By Mode")
     STAND_BY = false
     if addon:isRunning() then
         addon:autoZoom()
@@ -255,14 +237,27 @@ end
 
 function getAdjustment(frame) 
     frame:Show()
-    local adjustment = settings.general.adjustments[frame:GetModelFileID()]
+    local id = frame:GetModelFileID()
+
+    if (id == nil) then
+        return nil
+    end
+
+    local adjustment = settings.general.adjustments[id]
     frame:Hide()
     return adjustment
 end
 
 function setAdjustment(frame, adjustment) 
     frame:Show()
-    settings.general.adjustments[frame:GetModelFileID()] = adjustment
+    local id = frame:GetModelFileID()
+
+    if (id == nil) then
+        frame:Hide()
+        return
+    end
+
+    settings.general.adjustments[id] = adjustment
     frame:Hide()
 end
 
@@ -277,7 +272,7 @@ function addon:autoZoom()
                 elseif (settings.general.standByBehavior == "maxDistance") then
                     CameraZoomOut(maxZoomDistance)
                 end
-            elseif IN_ENCOUNTER then
+            elseif IN_ENCOUNTER or HAS_CLIMBING_GEAR then
                 if (settings.general.standByBehavior == "view") then
                     SetView(settings.general.instanceEncounterView)
                 elseif (settings.general.standByBehavior == "maxDistance") then
@@ -319,13 +314,12 @@ function addon:autoZoom()
     for _, unit in pairs(units) do
         local unitClassification = UnitClassification(unit.name)
         local unitClassificationDistanceRange = unitClassificationMaxDistance[unitClassification]
-        local unitLevel = UnitLevel(unit.name)
         
         if (
             not UnitIsDead(unit.name) and
             UnitCanAttack("player", unit.name) and
             (InCombatLockdown() or CheckInteractDistance(unit.name, 1)) and
-            (unit.name == 'target' or UnitGUID('target') ~= UnitGUID(unit.name)) -- if unit is target or a unit with nameplate that isn't the target (avoids counting target twice)
+            (unit.name == 'target' or not UnitIsUnit('target', unit.name)) -- if unit is target or a unit with nameplate that isn't the target (avoids counting target twice)
         ) then
             if (unitClassification == "worldboss") then
                 unit.distance = settings.general.bossEnemyDistance
@@ -635,6 +629,34 @@ function addon:options()
                                         type = "execute",
                                         name = "Default",
                                         func = function() settings.general.adjustments[T.playerModelFrame:GetModelFileID()] = nil end,
+                                        order = 2
+                                    }
+                                }
+                            },
+                            mount = {
+                                type = "group",
+                                name = "Mount",
+                                args = {
+                                    distance = T.merge(distanceOption(), {
+                                        name = "Distance",
+                                        desc = "The zoom distance that should be used for the current mount.",
+                                        width = "double",
+                                        get = function()
+                                            return getAdjustment(T.playerMountModelFrame) or getMountZoomDefault()
+                                        end,
+                                        set = function(info, value)
+                                            if (value == getMountZoomDefault()) then
+                                                setAdjustment(T.playerMountModelFrame, nil)
+                                            else
+                                                setAdjustment(T.playerMountModelFrame, value)
+                                            end
+                                        end,
+                                        order = 1
+                                    }),
+                                    toggle = {
+                                        type = "execute",
+                                        name = "Default",
+                                        func = function() settings.general.adjustments[T.playerMountModelFrame:GetModelFileID()] = nil end,
                                         order = 2
                                     }
                                 }
@@ -1015,7 +1037,8 @@ SlashCmdList["AC"] = function(arg)
         SettingsPanel:Open()
         InterfaceOptionsFrame_OpenToCategory("Auto-Camera")
     elseif (arg == "debug") then
-    print("Mount Zoom Default:", getMountZoomDefault())
+        print(AuraUtil.FindAuraByName("Rock Climbing Gear", "player"))
+    -- print(T.playerMountModelFrame:GetModelFileID())
 
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
@@ -1128,6 +1151,47 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     T.playerMountModelFrame:ClearAllPoints()
     T.playerMountModelFrame:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
     T.playerMountModelFrame:SetFrameStrata("HIGH")
+        T.playerMountModelFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+        T.playerMountModelFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        local lastMountID = nil
+        T.playerMountModelFrame:SetScript("OnEvent", function(self, event)
+            local updateMountFrame = function()
+                local mountID = GetCurrentMountId()
+                if mountID then
+                    if lastMountID ~= mountID then
+                        self:ClearModel() -- ensure previous model is cleared if mount changed
+                    end
+                    self:Show()
+                    local displayID
+                    local creatureDisplayInfoID = C_MountJournal.GetMountInfoExtraByID(mountID)
+                    if creatureDisplayInfoID then
+                        displayID = creatureDisplayInfoID
+                    end
+                    if not displayID then
+                        return
+                    end
+                    self:SetDisplayInfo(displayID)
+                    print(self:GetModelFileID())
+                    lastMountID = mountID
+                    if not SHOW_MOUNT_FRAME then
+                        self:Hide()
+                    end
+                else
+                    -- Dismount: clear the frame and ensure no print
+                    print("Dismounted")
+                    self:ClearModel()
+                    self:Hide()
+                    lastMountID = nil
+                end
+            end
+
+            if event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
+                C_Timer.After(0.1, updateMountFrame)
+            elseif event == "PLAYER_ENTERING_WORLD" then
+                updateMountFrame()
+                addon:evaluateHasClimbingGear()
+            end
+        end)
     if not SHOW_MOUNT_FRAME then
         T.playerMountModelFrame:Hide()
     else
@@ -1159,6 +1223,18 @@ function addon:UNIT_MODEL_CHANGED()
     LibStub("AceConfigRegistry-3.0"):NotifyChange("Auto-Camera")
 end
 
+function addon:evaluateHasClimbingGear()
+    if (AuraUtil.FindAuraByName("Rock Climbing Gear", "player") ~= nil) then
+        HAS_CLIMBING_GEAR = true
+    else
+        HAS_CLIMBING_GEAR = false
+    end
+end
+
+function addon:UNIT_AURA()
+    addon:evaluateHasClimbingGear()
+end
+
 local f = CreateFrame("Frame")
 
 local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED"}
@@ -1169,6 +1245,7 @@ for event in pairs(classicEvents) do
 end
 
 f:RegisterUnitEvent("UNIT_MODEL_CHANGED", "player")
+f:RegisterUnitEvent("UNIT_AURA", "player")
 
 if (xpac >= xpacs.wolc) then
     for event in pairs(wrathEvents) do
