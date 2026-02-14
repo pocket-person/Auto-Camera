@@ -1109,6 +1109,10 @@ function addon:ENCOUNTER_END()
     end
 end
 
+function addon:LFG_COMPLETION_REWARD()
+    addon:ENCOUNTER_END()
+end
+
 function addon:PLAYER_ENTERING_WORLD()
     local mapId = C_Map.GetBestMapForUnit("player")
     if (mapId == nil) then return end -- TODO what do when this happens?
@@ -1237,7 +1241,7 @@ end
 
 local f = CreateFrame("Frame")
 
-local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED"}
+local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED", "LFG_COMPLETION_REWARD"}
 local wrathEvents = T.set {"BARBER_SHOP_OPEN", "BARBER_SHOP_CLOSE"}
 
 for event in pairs(classicEvents) do
