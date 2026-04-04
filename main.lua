@@ -1234,6 +1234,32 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     end)
     T.playerModelFrame:RegisterUnitEvent("UNIT_PORTRAIT_UPDATE", "player")
 
+    -- Shift+Scroll updates the stored adjustment for the current model (character or mount).
+    -- Unmodified scroll passes through to normal camera zoom.
+    local scrollHandlerFrame = CreateFrame("Frame", nil, UIParent)
+    scrollHandlerFrame:SetAllPoints(UIParent)
+    scrollHandlerFrame:SetFrameStrata("BACKGROUND")
+    scrollHandlerFrame:EnableMouseWheel(true)
+    scrollHandlerFrame:SetScript("OnMouseWheel", function(self, delta)
+        if addon:isRunning() then
+            local frame, defaultFn
+            if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
+                frame = T.playerMountModelFrame
+                defaultFn = getMountZoomDefault
+            else
+                frame = T.playerModelFrame
+                defaultFn = getCharacterZoomDefault
+            end
+            local current = getAdjustment(frame) or defaultFn()
+            setAdjustment(frame, current - delta)
+        end
+        if delta > 0 then
+            CameraZoomIn(1)
+        else
+            CameraZoomOut(1)
+        end
+    end)
+
     if (not STAND_BY) then
         addon:autoZoom()
     end
