@@ -11,6 +11,8 @@ local IN_BARBER_SHOP = false
 local IN_RAID = false
 local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
+local IS_ADJUSTING = false
+local scrollDebounceTimer = nil
 local cameraZoomInKey1, cameraZoomInKey2, cameraZoomOutKey1, cameraZoomOutKey2
 local previousCameraZoom = GetCameraZoom()
 local previousPosition = nil
@@ -163,7 +165,8 @@ function addon:isRunning()
         not IN_ENCOUNTER and
         not IN_PET_BATTLE and
         not IN_BARBER_SHOP and
-        not HAS_CLIMBING_GEAR
+        not HAS_CLIMBING_GEAR and
+        not IS_ADJUSTING
 end
 
 function addon:loadSettings()
@@ -1241,18 +1244,26 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     scrollHandlerFrame:SetFrameStrata("BACKGROUND")
     scrollHandlerFrame:EnableMouseWheel(true)
     scrollHandlerFrame:SetScript("OnMouseWheel", function(self, delta)
-        if addon:isRunning() then
-            local frame, defaultFn
-            if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
-                frame = T.playerMountModelFrame
-                defaultFn = getMountZoomDefault
-            else
-                frame = T.playerModelFrame
-                defaultFn = getCharacterZoomDefault
-            end
-            local current = getAdjustment(frame) or defaultFn()
-            setAdjustment(frame, current - delta)
+        local frame
+        if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
+            frame = T.playerMountModelFrame
+        else
+            frame = T.playerModelFrame
         end
+
+        IS_ADJUSTING = true
+        if scrollDebounceTimer then
+            addon:CancelTimer(scrollDebounceTimer)
+        end
+        scrollDebounceTimer = addon:ScheduleTimer(function()
+            IS_ADJUSTING = false
+            scrollDebounceTimer = nil
+            setAdjustment(frame, GetCameraZoom())
+            if addon:isRunning() then
+                addon:autoZoom()
+            end
+        end, 0.5)
+
         if delta > 0 then
             CameraZoomIn(1)
         else
