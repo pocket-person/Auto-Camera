@@ -1190,10 +1190,26 @@ function addon:ADDON_LOADED(_, loadedAddonName)
             end
 
             if event == "PLAYER_MOUNT_DISPLAY_CHANGED" then
-                C_Timer.After(0.1, updateMountFrame)
-            elseif event == "PLAYER_ENTERING_WORLD" then
                 updateMountFrame()
+            elseif event == "PLAYER_ENTERING_WORLD" then
                 addon:evaluateHasClimbingGear()
+                if IsMounted("player") then
+                    -- On login while mounted the mount journal may not be populated yet.
+                    -- Poll until GetCurrentMountId() returns a value (max 20 attempts, ~1s).
+                    local attempts = 0
+                    local ticker
+                    ticker = C_Timer.NewTicker(0.05, function()
+                        attempts = attempts + 1
+                        if GetCurrentMountId() then
+                            ticker:Cancel()
+                            updateMountFrame()
+                        elseif attempts >= 20 then
+                            ticker:Cancel()
+                        end
+                    end)
+                else
+                    updateMountFrame()
+                end
             end
         end)
     if not SHOW_MOUNT_FRAME then
