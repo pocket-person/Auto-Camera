@@ -1262,7 +1262,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
             if addon:isRunning() then
                 addon:autoZoom()
             end
-        end, 0.5)
+        end, 1)
 
         if delta > 0 then
             CameraZoomIn(1)
