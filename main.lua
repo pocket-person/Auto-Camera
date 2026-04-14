@@ -13,7 +13,9 @@ local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
 local IS_ADJUSTING = false
 local scrollDebounceTimer = nil
-local cameraZoomInKey1, cameraZoomInKey2, cameraZoomOutKey1, cameraZoomOutKey2
+local scrollHandlerFrame
+local zoomInKeys = {}
+local zoomOutKeys = {}
 local previousCameraZoom = GetCameraZoom()
 local previousPosition = nil
 local previousTime = nil
@@ -142,6 +144,37 @@ local function getMountZoomDefault()
     local distance = linearFrameCamPosToWorldZoom(x, y, z)
     if (distance == baseZoomDistance) then distance = distance + 10 end
     return distance
+end
+
+-- Reads CAMERAZOOMIN/CAMERAZOOMOUT bindings and enables/disables the appropriate
+-- input handlers on scrollHandlerFrame so we only intercept genuine zoom inputs.
+local function updateZoomKeyBindings()
+    wipe(zoomInKeys)
+    wipe(zoomOutKeys)
+    local k1, k2 = GetBindingKey("CAMERAZOOMIN")
+    local k3, k4 = GetBindingKey("CAMERAZOOMOUT")
+    if k1 then zoomInKeys[k1] = true end
+    if k2 then zoomInKeys[k2] = true end
+    if k3 then zoomOutKeys[k3] = true end
+    if k4 then zoomOutKeys[k4] = true end
+
+    if not scrollHandlerFrame then return end
+
+    local hasScrollBinding = false
+    local hasKeyboardBinding = false
+    local hasAnyBinding = k1 or k2 or k3 or k4
+    for key in pairs(zoomInKeys) do
+        if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
+    end
+    for key in pairs(zoomOutKeys) do
+        if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
+    end
+
+    -- Enable mouse wheel when scroll is a zoom binding, or as a fallback when nothing is bound.
+    scrollHandlerFrame:EnableMouseWheel(hasScrollBinding or not hasAnyBinding)
+    -- Enable keyboard capture (with propagation) only when a non-scroll key is bound to zoom.
+    scrollHandlerFrame:EnableKeyboard(hasKeyboardBinding)
+    scrollHandlerFrame:SetPropagateKeyboardInput(hasKeyboardBinding)
 end
 
 local settings = T.defaultSettings()
@@ -1084,10 +1117,8 @@ function addon:VARIABLES_LOADED()
         addon:applyActionCamSettings()
     end
 
-    -- cameraZoomInKey1, cameraZoomInKey2 = GetBindingKey("CAMERAZOOMIN")
-    -- cameraZoomOutKey1, cameraZoomOutKey2 = GetBindingKey("CAMERAZOOMOUT")
-    -- cameraZoomKeys = T.set {cameraZoomInKey1, cameraZoomInKey2, cameraZoomOutKey1, cameraZoomOutKey2}
-    -- SetBinding(key, "PAUSE_AUTO_ZOOM")
+    -- Saved bindings are now loaded; refresh zoom key detection.
+    updateZoomKeyBindings()
 end
 
 function addon:PET_BATTLE_OPENING_START()
@@ -1237,20 +1268,15 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     end)
     T.playerModelFrame:RegisterUnitEvent("UNIT_PORTRAIT_UPDATE", "player")
 
-    -- Shift+Scroll updates the stored adjustment for the current model (character or mount).
-    -- Unmodified scroll passes through to normal camera zoom.
-    local scrollHandlerFrame = CreateFrame("Frame", nil, UIParent)
+    -- Tracks manual zoom inputs (scroll or bound key) and debounces auto-zoom resumption.
+    -- Only intercepts inputs that are actually bound to CAMERAZOOMIN/CAMERAZOOMOUT.
+    scrollHandlerFrame = CreateFrame("Frame", nil, UIParent)
     scrollHandlerFrame:SetAllPoints(UIParent)
     scrollHandlerFrame:SetFrameStrata("BACKGROUND")
-    scrollHandlerFrame:EnableMouseWheel(true)
-    scrollHandlerFrame:SetScript("OnMouseWheel", function(self, delta)
-        local frame
-        if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
-            frame = T.playerMountModelFrame
-        else
-            frame = T.playerModelFrame
-        end
 
+    -- Shared debounce logic: captures the correct frame now (before async delay) so
+    -- that a mount/dismount during the debounce window doesn't misattribute the adjustment.
+    local function handleZoomInput(frame)
         IS_ADJUSTING = true
         if scrollDebounceTimer then
             addon:CancelTimer(scrollDebounceTimer)
@@ -1262,14 +1288,49 @@ function addon:ADDON_LOADED(_, loadedAddonName)
             if addon:isRunning() then
                 addon:autoZoom()
             end
-        end, 1)
+        end, 0.5)
+    end
 
-        if delta > 0 then
+    local function currentZoomFrame()
+        if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
+            return T.playerMountModelFrame
+        else
+            return T.playerModelFrame
+        end
+    end
+
+    scrollHandlerFrame:SetScript("OnMouseWheel", function(self, delta)
+        local key = T.buildModifiedKey(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN")
+        local noBindings = not next(zoomInKeys) and not next(zoomOutKeys)
+        local isZoomIn = zoomInKeys[key]
+        local isZoomOut = zoomOutKeys[key]
+
+        if not isZoomIn and not isZoomOut and not noBindings then
+            return
+        end
+
+        handleZoomInput(currentZoomFrame())
+
+        -- A frame's OnMouseWheel consumes the scroll event, so WoW's key binding
+        -- system will NOT fire for this input. We must call CameraZoomIn/Out here.
+        if isZoomIn or (noBindings and delta > 0) then
             CameraZoomIn(1)
         else
             CameraZoomOut(1)
         end
     end)
+
+    -- Intercept non-scroll key zoom bindings. SetPropagateKeyboardInput ensures
+    -- the actual zoom still fires via the normal binding system.
+    scrollHandlerFrame:SetScript("OnKeyDown", function(self, key)
+        local fullKey = T.buildModifiedKey(key)
+        if not zoomInKeys[fullKey] and not zoomOutKeys[fullKey] then
+            return
+        end
+        handleZoomInput(currentZoomFrame())
+    end)
+
+    updateZoomKeyBindings()
 
     if (not STAND_BY) then
         addon:autoZoom()
@@ -1292,9 +1353,13 @@ function addon:UNIT_AURA()
     addon:evaluateHasClimbingGear()
 end
 
+function addon:UPDATE_BINDINGS()
+    updateZoomKeyBindings()
+end
+
 local f = CreateFrame("Frame")
 
-local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED", "LFG_COMPLETION_REWARD"}
+local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED", "LFG_COMPLETION_REWARD", "UPDATE_BINDINGS"}
 local wrathEvents = T.set {"BARBER_SHOP_OPEN", "BARBER_SHOP_CLOSE"}
 
 for event in pairs(classicEvents) do
