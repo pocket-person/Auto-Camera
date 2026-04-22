@@ -111,8 +111,6 @@ local function GetDerivedSpeed()
         previousPosition = {x = x, y = y, z = z}
     end
 
-    print(currentSpeed)
-
     if currentSpeed < 50 then
         previousSpeed = currentSpeed
         return currentSpeed
