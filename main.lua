@@ -91,32 +91,15 @@ end
 
 -- Returns derived speed using map coordinates and time
 local function GetDerivedSpeed()
-    local mapId = C_Map.GetBestMapForUnit("player")
-    local currentSpeed = 0
+    local x, y, z = UnitPosition("player")
     local currentTime = GetTime()
-    local currentPosition = nil
-    local mapWidth, mapHeight = nil, nil
-    if mapId then
-        local pos = C_Map.GetPlayerMapPosition(mapId, "player")
-        if pos then
-            local x, y = pos:GetXY()
-            currentPosition = {x = x, y = y}
-        end
-        -- Get map size in yards
-        if C_Map.GetMapWorldSize then
-            local size = C_Map.GetMapWorldSize(mapId)
-            if type(size) == "number" then
-                mapWidth, mapHeight = size, size
-            elseif type(size) == "table" then
-                mapWidth, mapHeight = size[1], size[2]
-            end
-        end
-    end
+    local currentSpeed = 0
 
-    if previousPosition and previousTime and currentPosition and mapWidth and mapHeight then
-        local dx = (currentPosition.x - previousPosition.x) * mapWidth
-        local dy = (currentPosition.y - previousPosition.y) * mapHeight
-        local distance = math.sqrt(dx * dx + dy * dy)
+    if previousPosition and previousTime and x and y and z then
+        local dx = x - previousPosition.x
+        local dy = y - previousPosition.y
+        local dz = z - previousPosition.z
+        local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         local elapsed = currentTime - previousTime
         if elapsed > 0 then
             currentSpeed = distance / elapsed -- yards per second
@@ -124,16 +107,17 @@ local function GetDerivedSpeed()
     end
 
     previousTime = currentTime
-    previousPosition = currentPosition
-    if (currentSpeed < 50) then
-        previousSpeed = currentSpeed
+    if x and y and z then
+        previousPosition = {x = x, y = y, z = z}
+    end
 
-        if (currentSpeed == 0) then
-            return GetUnitSpeed("player")
-        end
+    print(currentSpeed)
+
+    if currentSpeed < 50 then
+        previousSpeed = currentSpeed
         return currentSpeed
     else
-        -- filter out spikes due to things like map changes and teleports
+        -- filter spikes from things like teleports
         return previousSpeed
     end
 end
