@@ -1209,14 +1209,12 @@ function addon:ADDON_LOADED(_, loadedAddonName)
                         return
                     end
                     self:SetDisplayInfo(displayID)
-                    print(self:GetModelFileID())
                     lastMountID = mountID
                     if not SHOW_MOUNT_FRAME then
                         self:Hide()
                     end
                 else
                     -- Dismount: clear the frame and ensure no print
-                    print("Dismounted")
                     self:ClearModel()
                     self:Hide()
                     lastMountID = nil
