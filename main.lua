@@ -16,6 +16,9 @@ local scrollDebounceTimer = nil
 local scrollHandlerFrame
 local zoomInKeys = {}
 local zoomOutKeys = {}
+local viewNextKeys = {}
+local viewPrevKeys = {}
+local viewSetKeys = {} -- key -> view number (1-5)
 local previousCameraZoom = GetCameraZoom()
 local previousPosition = nil
 local previousTime = nil
@@ -133,12 +136,27 @@ end
 local function updateZoomKeyBindings()
     wipe(zoomInKeys)
     wipe(zoomOutKeys)
+    wipe(viewNextKeys)
+    wipe(viewPrevKeys)
+    wipe(viewSetKeys)
     local k1, k2 = GetBindingKey("CAMERAZOOMIN")
     local k3, k4 = GetBindingKey("CAMERAZOOMOUT")
     if k1 then zoomInKeys[k1] = true end
     if k2 then zoomInKeys[k2] = true end
     if k3 then zoomOutKeys[k3] = true end
     if k4 then zoomOutKeys[k4] = true end
+
+    local kn1, kn2 = GetBindingKey("NEXTVIEW")
+    local kp1, kp2 = GetBindingKey("PREVVIEW")
+    if kn1 then viewNextKeys[kn1] = true end
+    if kn2 then viewNextKeys[kn2] = true end
+    if kp1 then viewPrevKeys[kp1] = true end
+    if kp2 then viewPrevKeys[kp2] = true end
+    for i = 1, 5 do
+        local ks1, ks2 = GetBindingKey("SETVIEW" .. i)
+        if ks1 then viewSetKeys[ks1] = i end
+        if ks2 then viewSetKeys[ks2] = i end
+    end
 
     if not scrollHandlerFrame then return end
 
@@ -151,10 +169,19 @@ local function updateZoomKeyBindings()
     for key in pairs(zoomOutKeys) do
         if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
     end
+    for key in pairs(viewNextKeys) do
+        if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
+    end
+    for key in pairs(viewPrevKeys) do
+        if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
+    end
+    for key in pairs(viewSetKeys) do
+        if T.isScrollKey(key) then hasScrollBinding = true else hasKeyboardBinding = true end
+    end
 
-    -- Enable mouse wheel when scroll is a zoom binding, or as a fallback when nothing is bound.
+    -- Enable mouse wheel when scroll is a zoom/view binding, or as a fallback when nothing is bound.
     scrollHandlerFrame:EnableMouseWheel(hasScrollBinding or not hasAnyBinding)
-    -- Enable keyboard capture (with propagation) only when a non-scroll key is bound to zoom.
+    -- Enable keyboard capture (with propagation) only when a non-scroll key is bound to zoom/view.
     scrollHandlerFrame:EnableKeyboard(hasKeyboardBinding)
     scrollHandlerFrame:SetPropagateKeyboardInput(hasKeyboardBinding)
 end
@@ -1271,6 +1298,23 @@ function addon:ADDON_LOADED(_, loadedAddonName)
         end, 0.5)
     end
 
+    -- Like handleZoomInput but with a 3-second debounce, since camera views can
+    -- take longer to finish transitioning to their zoom destination.
+    local function handleViewInput(frame)
+        IS_ADJUSTING = true
+        if scrollDebounceTimer then
+            addon:CancelTimer(scrollDebounceTimer)
+        end
+        scrollDebounceTimer = addon:ScheduleTimer(function()
+            IS_ADJUSTING = false
+            scrollDebounceTimer = nil
+            setAdjustment(frame, GetCameraZoom())
+            if addon:isRunning() then
+                addon:autoZoom()
+            end
+        end, 3.0)
+    end
+
     local function currentZoomFrame()
         if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
             return T.playerMountModelFrame
@@ -1281,33 +1325,53 @@ function addon:ADDON_LOADED(_, loadedAddonName)
 
     scrollHandlerFrame:SetScript("OnMouseWheel", function(self, delta)
         local key = T.buildModifiedKey(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN")
-        local noBindings = not next(zoomInKeys) and not next(zoomOutKeys)
+        local noZoomBindings = not next(zoomInKeys) and not next(zoomOutKeys)
         local isZoomIn = zoomInKeys[key]
         local isZoomOut = zoomOutKeys[key]
-
-        if not isZoomIn and not isZoomOut and not noBindings then
-            return
-        end
-
-        handleZoomInput(currentZoomFrame())
+        local isNextView = viewNextKeys[key]
+        local isPrevView = viewPrevKeys[key]
+        local setViewNum = viewSetKeys[key]
 
         -- A frame's OnMouseWheel consumes the scroll event, so WoW's key binding
-        -- system will NOT fire for this input. We must call CameraZoomIn/Out here.
-        if isZoomIn or (noBindings and delta > 0) then
+        -- system will NOT fire for this input. We must invoke the appropriate
+        -- action manually for any binding we recognise.
+        if isNextView then
+            handleViewInput(currentZoomFrame())
+            NextView()
+        elseif isPrevView then
+            handleViewInput(currentZoomFrame())
+            PrevView()
+        elseif setViewNum then
+            handleViewInput(currentZoomFrame())
+            SetView(setViewNum)
+        elseif isZoomIn then
+            handleZoomInput(currentZoomFrame())
             CameraZoomIn(1)
-        else
+        elseif isZoomOut then
+            handleZoomInput(currentZoomFrame())
             CameraZoomOut(1)
+        elseif noZoomBindings then
+            -- Fallback: no zoom bindings configured; treat any scroll as zoom.
+            handleZoomInput(currentZoomFrame())
+            if delta > 0 then CameraZoomIn(1) else CameraZoomOut(1) end
         end
+        -- else: unrecognised key while bindings exist; event is consumed but no action taken.
     end)
 
-    -- Intercept non-scroll key zoom bindings. SetPropagateKeyboardInput ensures
-    -- the actual zoom still fires via the normal binding system.
+    -- Intercept non-scroll key zoom/view bindings. SetPropagateKeyboardInput ensures
+    -- the actual action still fires via the normal binding system.
     scrollHandlerFrame:SetScript("OnKeyDown", function(self, key)
         local fullKey = T.buildModifiedKey(key)
-        if not zoomInKeys[fullKey] and not zoomOutKeys[fullKey] then
+        local isZoom = zoomInKeys[fullKey] or zoomOutKeys[fullKey]
+        local isView = viewNextKeys[fullKey] or viewPrevKeys[fullKey] or viewSetKeys[fullKey]
+        if not isZoom and not isView then
             return
         end
-        handleZoomInput(currentZoomFrame())
+        if isView then
+            handleViewInput(currentZoomFrame())
+        else
+            handleZoomInput(currentZoomFrame())
+        end
     end)
 
     updateZoomKeyBindings()
