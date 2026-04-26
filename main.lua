@@ -49,6 +49,14 @@ local unitClassificationMaxDistance = {
         max = 2
     }
 }
+-- Fallback distances used when SetUnit fails on restricted maps (dungeons/raids/delves)
+-- because enemy unit identities are classified (RequiresDeclassifiedUnitIdentity).
+local unitClassificationFallbackDistance = {
+    worldboss  = nil, -- handled separately via settings.general.bossEnemyDistance
+    rareelite  = 10,
+    elite      = 8,
+    rare       = 6,
+}
 
 -- debug flags
 local SHOW_MOUNT_FRAME = false
@@ -371,8 +379,15 @@ function addon:autoZoom()
             else
                 unit.frame:Show()
                 unit.frame:ClearModel()
-                unit.frame:SetUnit(unit.name)
-                unit.distance = linearFrameCamPosToWorldZoom(unit.frame:GetCameraPosition())
+                local setUnitSuccess = unit.frame:SetUnit(unit.name)
+                if setUnitSuccess then
+                    unit.distance = linearFrameCamPosToWorldZoom(unit.frame:GetCameraPosition())
+                else
+                    -- SetUnit returns nil on restricted maps (dungeons/raids/delves) because
+                    -- enemy unit identities are classified (RequiresDeclassifiedUnitIdentity).
+                    -- Fall back to a classification-based estimate.
+                    unit.distance = unitClassificationFallbackDistance[unitClassification] or 5
+                end
                 unit.frame:Hide()
 
                 -- clamp distance to unit classification range
