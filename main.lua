@@ -13,6 +13,7 @@ local IN_RAID = false
 local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
 local IS_ADJUSTING = false
+local adjustmentFrame = nil
 local scrollDebounceTimer = nil
 local scrollHandlerFrame
 local zoomInKeys = {}
@@ -1302,17 +1303,24 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     scrollHandlerFrame:SetAllPoints(UIParent)
     scrollHandlerFrame:SetFrameStrata("BACKGROUND")
 
-    -- Shared debounce logic: captures the correct frame now (before async delay) so
+    -- Shared debounce logic: locks the context frame at the start of an adjustment so
     -- that a mount/dismount during the debounce window doesn't misattribute the adjustment.
+    -- Adjustments are not saved when auto-zoom is in stand-by mode.
     local function handleZoomInput(frame)
-        IS_ADJUSTING = true
+        if not IS_ADJUSTING then
+            IS_ADJUSTING = true
+            adjustmentFrame = frame
+        end
         if scrollDebounceTimer then
             addon:CancelTimer(scrollDebounceTimer)
         end
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            setAdjustment(frame, GetCameraZoom())
+            if not STAND_BY then
+                setAdjustment(adjustmentFrame, GetCameraZoom())
+            end
+            adjustmentFrame = nil
             if addon:isRunning() then
                 addon:autoZoom()
             end
@@ -1322,14 +1330,20 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     -- Like handleZoomInput but with a 3-second debounce, since camera views can
     -- take longer to finish transitioning to their zoom destination.
     local function handleViewInput(frame)
-        IS_ADJUSTING = true
+        if not IS_ADJUSTING then
+            IS_ADJUSTING = true
+            adjustmentFrame = frame
+        end
         if scrollDebounceTimer then
             addon:CancelTimer(scrollDebounceTimer)
         end
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            setAdjustment(frame, GetCameraZoom())
+            if not STAND_BY then
+                setAdjustment(adjustmentFrame, GetCameraZoom())
+            end
+            adjustmentFrame = nil
             if addon:isRunning() then
                 addon:autoZoom()
             end
