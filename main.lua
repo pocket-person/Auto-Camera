@@ -8,6 +8,7 @@ local IN_PET_BATTLE = false
 local HAS_CLIMBING_GEAR = false
 local IN_ENCOUNTER = false
 local IN_BARBER_SHOP = false
+local IN_HUD_EDIT_MODE = false
 local IN_RAID = false
 local IN_DUNGEON = false
 local STAND_BY_BEHAVIOR_HANDLED = true
@@ -215,6 +216,7 @@ function addon:isRunning()
         not IN_ENCOUNTER and
         not IN_PET_BATTLE and
         not IN_BARBER_SHOP and
+        not IN_HUD_EDIT_MODE and
         not HAS_CLIMBING_GEAR and
         not IS_ADJUSTING
 end
@@ -1186,6 +1188,10 @@ function addon:BARBER_SHOP_OPEN()
     IN_BARBER_SHOP = true
 end
 
+function addon:AURA_DATA_PROVIDER_SWITCH(_, realData)
+    IN_HUD_EDIT_MODE = not realData
+end
+
 function addon:BARBER_SHOP_CLOSE()
     IN_BARBER_SHOP = false
 
@@ -1418,7 +1424,7 @@ end
 
 local f = CreateFrame("Frame")
 
-local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED", "LFG_COMPLETION_REWARD", "UPDATE_BINDINGS"}
+local classicEvents = T.set {"PET_BATTLE_OPENING_START", "PET_BATTLE_CLOSE", "ENCOUNTER_START", "ENCOUNTER_END", "PLAYER_ENTERING_WORLD", "VARIABLES_LOADED", "ADDON_LOADED", "LFG_COMPLETION_REWARD", "UPDATE_BINDINGS", "AURA_DATA_PROVIDER_SWITCH"}
 local wrathEvents = T.set {"BARBER_SHOP_OPEN", "BARBER_SHOP_CLOSE"}
 
 for event in pairs(classicEvents) do
