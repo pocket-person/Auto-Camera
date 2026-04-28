@@ -102,8 +102,24 @@ local function GetCurrentMountId()
     return nil
 end
 
--- Returns derived speed using map coordinates and time
+-- Returns derived speed using map coordinates and time, falling back to GetUnitSpeed in instances
 local function GetDerivedSpeed()
+    -- GetUnitSpeed works everywhere including raids/dungeons where UnitPosition returns nil.
+    -- In combat, the return value is "secret" and can't be compared by tainted code, so use pcall.
+    local unitSpeed = 0
+    pcall(function()
+        local s = GetUnitSpeed("player")
+        if s and s > 0 then unitSpeed = s end
+    end)
+    if unitSpeed > 0 then
+        if unitSpeed < 50 then
+            previousSpeed = unitSpeed
+            return unitSpeed
+        else
+            return previousSpeed
+        end
+    end
+
     local x, y, z = UnitPosition("player")
     local currentTime = GetTime()
     local currentSpeed = 0
