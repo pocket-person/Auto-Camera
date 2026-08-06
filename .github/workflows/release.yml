@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+\.[0-9]+\.[0-9]+"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -11,68 +14,23 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Libraries
         id: install_libraries
         run: ./installLibs.sh
 
+      - name: Audit TOC files
+        id: audit_tocs
+        run: bash ./auditTocs.sh
+
       - name: Create Distribution
         id: create_distribution
         run: ./build.sh "${{ github.ref_name }}"
 
-      - name: Get release
-        id: get_release
-        uses: bruceadams/get-release@v1.2.3
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Upload release json artifact to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./release.json
-          asset_name: release.json
-          asset_content_type: application/json
-
-      - name: Upload retail artifact to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./Auto-Camera.zip
-          asset_name: Auto-Camera-${{ github.ref_name }}.zip
-          asset_content_type: application/zip
-
-      - name: Upload classic artifact to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./Auto-Camera-classic.zip
-          asset_name: Auto-Camera-${{ github.ref_name }}-classic.zip
-          asset_content_type: application/zip
-
-      - name: Upload bcc artifact to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./Auto-Camera-bcc.zip
-          asset_name: Auto-Camera-${{ github.ref_name }}-bcc.zip
-          asset_content_type: application/zip
-
-      - name: Upload bcc artifact to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./Auto-Camera-wrath.zip
-          asset_name: Auto-Camera-${{ github.ref_name }}-wrath.zip
-          asset_content_type: application/zip
+          files: |
+            ./release.json
+            ./Auto-Camera-${{ github.ref_name }}*.zip

@@ -84,6 +84,20 @@ function T.joinTable(tbl, glue)
     return str
 end
 
+-- Builds a WoW binding key string for the current modifier state + a base key.
+-- Matches the format returned by GetBindingKey() (SHIFT > CTRL > ALT prefix order).
+function T.buildModifiedKey(baseKey)
+    local key = baseKey
+    if IsShiftKeyDown() then key = "SHIFT-" .. key end
+    if IsControlKeyDown() then key = "CTRL-" .. key end
+    if IsAltKeyDown() then key = "ALT-" .. key end
+    return key
+end
+
+function T.isScrollKey(key)
+    return key ~= nil and (key:find("MOUSEWHEELUP", 1, true) ~= nil or key:find("MOUSEWHEELDOWN", 1, true) ~= nil)
+end
+
 -- recursively print a table
 function T.printTable(tbl, depth)
     local depth = depth or 0;

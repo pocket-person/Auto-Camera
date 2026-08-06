@@ -18,6 +18,7 @@ function T.defaultSettings()
       eliteEnemyDistance = 4,
       raidEnemyDistance = 8,
       bossEnemyDistance = 50,
+      adjustments = {}
     },
     actionCam = {
       suppressExperimentalCVarPrompt = false
