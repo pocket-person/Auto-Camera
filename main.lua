@@ -277,10 +277,22 @@ function addon:OnInitialize()
 
     STAND_BY = settings.general.standByOnLoad
 
-    -- disable experimental feature prompt if configured
+    -- setup experimental feature prompt suppression if configured
     if (settings.actionCam.suppressExperimentalCVarPrompt) then
-        UIParent:UnregisterEvent("EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED")
+        addon:setupExperimentalPromptSuppression()
     end
+end
+
+-- setup frame to suppress the experimental feature warning popup+
+function addon:setupExperimentalPromptSuppression()
+    local suppressionFrame = CreateFrame("Frame")
+    suppressionFrame:RegisterEvent("EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED")
+    suppressionFrame:SetScript("OnEvent", function(self, event)
+        if event == "EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED" then
+            -- hide the popup immediately when it appears
+            StaticPopup_Hide("EXPERIMENTAL_CVAR_WARNING")
+        end
+    end)
 end
 
 -- helper functions
@@ -373,7 +385,7 @@ function addon:autoZoom()
 
     local prevTargetZoom = targetZoom
     
-    if (AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player")) then
+    if (T.findAuraByName("Running Wild", "player") == nil and IsMounted("player")) then
         targetZoom = getAdjustment(T.playerMountModelFrame) or getMountZoomDefault()
     else
         targetZoom = getAdjustment(T.playerModelFrame) or getCharacterZoomDefault()
@@ -1116,7 +1128,7 @@ SlashCmdList["AC"] = function(arg)
         SettingsPanel:Open()
         InterfaceOptionsFrame_OpenToCategory("Auto-Camera")
     elseif (arg == "debug") then
-        print(AuraUtil.FindAuraByName("Rock Climbing Gear", "player"))
+        print(T.findAuraByName("Rock Climbing Gear", "player"))
     -- print(T.playerMountModelFrame:GetModelFileID())
 
         -- local x, y, z = T.targetModelFrame:GetCameraPosition()
@@ -1321,7 +1333,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
 
     -- Shared debounce logic: locks the context frame at the start of an adjustment so
     -- that a mount/dismount during the debounce window doesn't misattribute the adjustment.
-    -- Adjustments are not saved when auto-zoom is in stand-by mode.
+    -- Adjustments are not saved when auto-zoom is in stand-by mode or during encounters.
     local function handleZoomInput(frame)
         if not IS_ADJUSTING then
             IS_ADJUSTING = true
@@ -1333,7 +1345,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            if not STAND_BY then
+            if not STAND_BY and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
                 setAdjustment(adjustmentFrame, GetCameraZoom())
             end
             adjustmentFrame = nil
@@ -1356,7 +1368,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            if not STAND_BY then
+            if not STAND_BY and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
                 setAdjustment(adjustmentFrame, GetCameraZoom())
             end
             adjustmentFrame = nil
@@ -1367,7 +1379,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     end
 
     local function currentZoomFrame()
-        if AuraUtil.FindAuraByName("Running Wild", "player") == nil and IsMounted("player") then
+        if T.findAuraByName("Running Wild", "player") == nil and IsMounted("player") then
             return T.playerMountModelFrame
         else
             return T.playerModelFrame
@@ -1437,7 +1449,7 @@ function addon:UNIT_MODEL_CHANGED()
 end
 
 function addon:evaluateHasClimbingGear()
-    if (AuraUtil.FindAuraByName("Rock Climbing Gear", "player") ~= nil) then
+    if (T.findAuraByName("Rock Climbing Gear", "player") ~= nil) then
         HAS_CLIMBING_GEAR = true
     else
         HAS_CLIMBING_GEAR = false

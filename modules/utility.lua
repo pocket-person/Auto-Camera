@@ -98,6 +98,18 @@ function T.isScrollKey(key)
     return key ~= nil and (key:find("MOUSEWHEELUP", 1, true) ~= nil or key:find("MOUSEWHEELDOWN", 1, true) ~= nil)
 end
 
+
+function T.findAuraByName(name, unit, filter)
+    if AuraUtil == nil or AuraUtil.FindAuraByName == nil then
+        return nil
+    end
+    local ok, result = pcall(AuraUtil.FindAuraByName, name, unit, filter)
+    if not ok then
+        return nil
+    end
+    return result
+end
+
 -- recursively print a table
 function T.printTable(tbl, depth)
     local depth = depth or 0;
