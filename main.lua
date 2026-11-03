@@ -668,11 +668,6 @@ function addon:options()
                         order = 3,
                         name = "Contextual Camera Distances",
                         args = {
-                            ridingDistance = T.merge(distanceOption(), {
-                                name = 'Riding',
-                                desc = 'Camera distance when riding on a mount or in a vehicle',
-                                order = 1
-                            }),
                             speedMultiplier = {
                                 type = 'range',
                                 name = 'Speed Multiplier',
@@ -680,12 +675,12 @@ function addon:options()
                                 min = 0,
                                 max = 0.5,
                                 step = 0.01,
-                                order = 2
+                                order = 1
                             },
                             bossEnemyDistance = T.merge(distanceOption(), {
                                 name = 'Per Boss Enemy',
                                 desc = 'Distance to add per boss enemy on screen near the player character',
-                                order = 3
+                                order = 2
                             })
                         }
                     },
