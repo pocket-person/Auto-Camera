@@ -12,12 +12,12 @@ function T.defaultSettings()
       manualStandByView = 5,
       petBattleView = 5,
       instanceEncounterView = 5,
-      ridingDistance = 8.5,
       speedMultiplier = 0.1,
       normalEnemyDistance = 4,
       eliteEnemyDistance = 4,
       raidEnemyDistance = 8,
       bossEnemyDistance = 50,
+      adjustments = {}
     },
     actionCam = {
       suppressExperimentalCVarPrompt = false

@@ -1,2 +1,2 @@
 local addonName, T = ...
-T.version = "0.2.0"
+T.version = "0.3.0"
