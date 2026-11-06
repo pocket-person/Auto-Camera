@@ -15,22 +15,17 @@ if [ "${1:-}" = "--offline" ]; then
 fi
 
 shopt -s nullglob
-tocFiles=(Auto-Camera*.toc)
+tocFiles=(Auto-Camera-*.toc)
 shopt -u nullglob
 
 if [ ${#tocFiles[@]} -eq 0 ]; then
-  echo "ERROR: no TOC files found (expected Auto-Camera*.toc)"
+  echo "ERROR: no flavor TOC files found (expected Auto-Camera-*.toc)"
   exit 1
 fi
 
-if [ ! -f "Auto-Camera.toc" ]; then
-  echo "ERROR: missing base TOC file Auto-Camera.toc"
-  exit 1
-fi
-
-baseVersion=$(toc_version Auto-Camera.toc || true)
+baseVersion=$(toc_version Auto-Camera-Retail.toc || true)
 if [ -z "$baseVersion" ]; then
-  echo "ERROR: Auto-Camera.toc is missing a ## Version field"
+  echo "ERROR: Auto-Camera-Retail.toc is missing a ## Version field"
   exit 1
 fi
 
@@ -56,6 +51,7 @@ fi
 
 declare -A tocInterfaceByFile
 declare -A tocInterfaceByMajor
+declare -A tocSuffixByFile
 
 for tocFile in "${tocFiles[@]}"; do
   suffix=$(toc_suffix_from_filename "$tocFile") || {
@@ -73,13 +69,16 @@ for tocFile in "${tocFiles[@]}"; do
     exit 1
   fi
   tocInterfaceByFile["$tocFile"]="$interfaceVersion"
+  tocSuffixByFile["$tocFile"]="$suffix"
 
   major=$((10#${interfaceVersion} / 10000))
-  if [ -n "${tocInterfaceByMajor[$major]:-}" ]; then
-    echo "ERROR: duplicate TOC coverage for interface major '$major' ($tocFile and ${tocInterfaceByMajor[$major]})"
-    exit 1
+  if [ "$suffix" != "forever" ]; then
+    if [ -n "${tocInterfaceByMajor[$major]:-}" ]; then
+      echo "ERROR: duplicate TOC coverage for interface major '$major' ($tocFile and ${tocInterfaceByMajor[$major]})"
+      exit 1
+    fi
+    tocInterfaceByMajor["$major"]="$tocFile"
   fi
-  tocInterfaceByMajor["$major"]="$tocFile"
 
   tocVersion=$(toc_version "$tocFile" || true)
   if [ -z "$tocVersion" ]; then
@@ -103,6 +102,10 @@ if [ "$onlineCheck" -eq 1 ]; then
   done
 
   for tocFile in "${tocFiles[@]}"; do
+    if [ "${tocSuffixByFile[$tocFile]}" = "forever" ]; then
+      continue
+    fi
+
     iface="${tocInterfaceByFile[$tocFile]}"
     major=$((10#${iface} / 10000))
     expectedIface="${liveInterfaceByMajor[$major]:-}"

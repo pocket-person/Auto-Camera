@@ -39,6 +39,12 @@ toc_version() {
 
 release_flavor_from_interface() {
   local interfaceVersion="$1"
+  local tocFile="${2:-}"
+  if [ "$(toc_suffix_from_filename "$tocFile")" = "forever" ]; then
+    echo "wowforever"
+    return 0
+  fi
+
   local major=$((10#${interfaceVersion} / 10000))
   case "$major" in
     12)

@@ -27,12 +27,12 @@ cp *.xml Auto-Camera
 
 releaseEntries=()
 shopt -s nullglob
-tocFiles=(Auto-Camera*.toc)
+tocFiles=(Auto-Camera-*.toc)
 shopt -u nullglob
 declare -A seenFlavors
 
 if [ ${#tocFiles[@]} -eq 0 ]; then
-	echo "no TOC files found (expected Auto-Camera*.toc)"
+	echo "no flavor TOC files found (expected Auto-Camera-*.toc)"
 	exit 1
 fi
 
@@ -52,7 +52,7 @@ for tocFile in "${tocFiles[@]}"; do
 		exit 1
 	fi
 
-	flavor=$(release_flavor_from_interface "$interfaceVersion") || {
+	flavor=$(release_flavor_from_interface "$interfaceVersion" "$tocFile") || {
 		echo "unsupported interface '$interfaceVersion' in TOC file: $tocFile"
 		exit 1
 	}

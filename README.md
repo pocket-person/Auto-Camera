@@ -17,3 +17,10 @@ A World of Warcraft addon that augments the camera's functionality and control.
 /ac standby&nbsp&nbsp&nbspenters stand-by mode<br/>
 /ac resume&nbsp&nbsp&nbsp&nbspexits stand-by mode<br/>
 /ac settings&nbsp&nbsp&nbspopens Auto-Camera settings<br/>
+
+<h2>Local Flavor Testing</h2>
+The base <code>Auto-Camera.toc</code> is generated locally and ignored by Git. To select a flavor for live testing, run:
+
+<pre>bash ./scripts/use-flavor.sh [flavor]</pre>
+
+The flavor defaults to <code>retail</code>. Supported flavors are <code>retail</code>, <code>anniversary</code>, <code>classic-era</code>, <code>mop-classic</code>, and <code>forever</code>.
