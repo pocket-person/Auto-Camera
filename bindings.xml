@@ -1,6 +1,6 @@
 <Bindings>
- 	<Binding name="TOGGLE_STAND_BY" header="AUTO_CAMERA" category="ADDONS">
-		AutoCamera:toggleStandBy()
+ 	<Binding name="AUTO_CAMERA_TOGGLE_AUTO_ZOOM" header="AUTO_CAMERA" category="ADDONS">
+		AutoCamera:toggleAutoZoom()
  	</Binding>
 </Bindings>
  

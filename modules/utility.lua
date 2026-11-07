@@ -1,7 +1,7 @@
 local addonName, T = ...
 
 function T.deepCopy(tree)
-    if not tree then return nil
+    if tree == nil then return nil
     elseif type(tree) == "table" then
         local branch = {}
         

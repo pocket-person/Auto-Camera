@@ -2,7 +2,7 @@
 ## Title: Auto-Camera
 ## Notes: Dynamically zooms the camera in and out based on your character's surroundings
 ## Author: Pockets
-## Version: 0.3.0
+## Version: 0.3.1
 ## SavedVariables: AutoCameraDB
 
 embeds.xml
@@ -11,5 +11,7 @@ modules\utility.lua
 modules\actionCamCVars.lua
 modules\version.lua
 modules\settings.lua
+modules\settingsReset.lua
+modules\settingsPanel.lua
 
 main.lua

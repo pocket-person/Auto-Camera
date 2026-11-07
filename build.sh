@@ -22,7 +22,10 @@ rm -f Auto-Camera*.zip
 mkdir Auto-Camera
 cp *.lua Auto-Camera
 cp -r modules Auto-Camera
-cp -r libs Auto-Camera
+mkdir Auto-Camera/libs
+for library in LibStub CallbackHandler-1.0 AceAddon-3.0 AceDB-3.0 AceTimer-3.0; do
+	cp -r "libs/$library" Auto-Camera/libs
+done
 cp *.xml Auto-Camera
 
 releaseEntries=()

@@ -3,7 +3,7 @@ AutoCamera = LibStub("AceAddon-3.0"):NewAddon(addonName, "AceTimer-3.0")
 local addon = AutoCamera
 local baseZoomDistance = 0.5
 local modelZoomMultiplier = 1.7
-local STAND_BY = false
+local AUTO_ZOOM_PAUSED = false
 local IN_PET_BATTLE = false
 local HAS_CLIMBING_GEAR = false
 local IN_ENCOUNTER = false
@@ -11,7 +11,7 @@ local IN_BARBER_SHOP = false
 local IN_HUD_EDIT_MODE = false
 local IN_RAID = false
 local IN_DUNGEON = false
-local STAND_BY_BEHAVIOR_HANDLED = true
+local PAUSE_BEHAVIOR_HANDLED = true
 local IS_ADJUSTING = false
 local adjustmentFrame = nil
 local scrollDebounceTimer = nil
@@ -26,7 +26,6 @@ local previousPosition = nil
 local previousTime = nil
 local previousSpeed = 0
 local deltaTime = 0.1
-local previousSettings = {general = nil, actionCam = nil, actionCamGroups = {}} -- stores the previous settings when defaults are applied by the user
 local playerRace = UnitRace("player")
 local maxZoomDistance = 50
 local xpac = tonumber(string.match(GetBuildInfo(), "([0-9]+)\..*"))
@@ -220,16 +219,17 @@ for i = 1, 10 do
 end
 
 BINDING_HEADER_AUTO_CAMERA = "Auto-Camera"
-BINDING_NAME_TOGGLE_STAND_BY = "Toggle Auto-Zoom"
--- BINDING_NAME_ENTER_STAND_BY = "Pause Auto-Zoom"
+BINDING_NAME_AUTO_CAMERA_TOGGLE_AUTO_ZOOM = "Pause / Resume Key"
 
 function addon:OnEnable()
+    if self.settingsMigrationFailed then return end
     self:ScheduleRepeatingTimer("autoZoom", 0.1)
 end
 
 function addon:isRunning() 
     return
-        not STAND_BY and
+        not self.settingsMigrationFailed and
+        not AUTO_ZOOM_PAUSED and
         not IN_ENCOUNTER and
         not IN_PET_BATTLE and
         not IN_BARBER_SHOP and
@@ -240,42 +240,22 @@ end
 
 function addon:loadSettings()
     settings = addon.db.global
-
-    -- update settings if necessary
-    if (settings.version ~= T.version) then
-        addon:updateSettings(settings)
-    end
-end
-
-function addon:updateSettings(settings)
-    -- set default version if nil
-    settings.version = settings.version or "0.0.0"
-
-    for updateVersion, updateFunction in pairs(settingsUpdateMap) do
-        -- run version structure conversion
-        if (updateVersion > settings.version) then
-            updateFunction(settings)
-        end
-
-        -- update version
-        settings.version = updateVersion
-    end
-
-    T.deepMerge(settings, T.deepMerge(T.defaultSettings(), settings, true))
-
-    settings.version = T.version
-    return settings
 end
 
 -- addon hook callback functions
 function addon:OnInitialize()
-    local options = addon:options()
+    -- Migrate raw data before AceDB injects defaults into the old layout.
+    local success, candidate = T.prepareSavedSettings(AutoCameraDB)
+    if not success then
+        T.setupMigrationRecovery(self, candidate)
+        return
+    end
+    AutoCameraDB = candidate
     addon.db = LibStub("AceDB-3.0"):New("AutoCameraDB", {global = T.defaultSettings()}, true)
     addon:loadSettings()
-    LibStub("AceConfig-3.0"):RegisterOptionsTable(addonName, options)
-    LibStub("AceConfigDialog-3.0"):AddToBlizOptions(addonName, addonName)
+    T.setupSettingsPanel(addon)
 
-    STAND_BY = settings.general.standByOnLoad
+    AUTO_ZOOM_PAUSED = settings.general.pauseOnLoad
 
     -- setup experimental feature prompt suppression if configured
     if (settings.actionCam.suppressExperimentalCVarPrompt) then
@@ -285,10 +265,12 @@ end
 
 -- setup frame to suppress the experimental feature warning popup+
 function addon:setupExperimentalPromptSuppression()
+    if self.experimentalPromptFrame then return end
     local suppressionFrame = CreateFrame("Frame")
+    self.experimentalPromptFrame = suppressionFrame
     suppressionFrame:RegisterEvent("EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED")
     suppressionFrame:SetScript("OnEvent", function(self, event)
-        if event == "EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED" then
+        if event == "EXPERIMENTAL_CVAR_CONFIRMATION_NEEDED" and settings.actionCam.suppressExperimentalCVarPrompt then
             -- hide the popup immediately when it appears
             StaticPopup_Hide("EXPERIMENTAL_CVAR_WARNING")
         end
@@ -296,34 +278,37 @@ function addon:setupExperimentalPromptSuppression()
 end
 
 -- helper functions
-function addon:toggleStandBy()
-    if (STAND_BY) then
-        STAND_BY = false
+function addon:toggleAutoZoom()
+    if self.settingsMigrationFailed then self:showMigrationRecovery(); return end
+    if (AUTO_ZOOM_PAUSED) then
+        AUTO_ZOOM_PAUSED = false
         addon:autoZoom()
     else
-        STAND_BY = true
+        AUTO_ZOOM_PAUSED = true
     end
-    LibStub("AceConfigRegistry-3.0"):NotifyChange("Auto-Camera")
 end
 
-function addon:enterStandBy()
-    print("Entering Stand-By Mode")
-    STAND_BY = true
+function addon:pauseAutoZoom()
+    if self.settingsMigrationFailed then self:showMigrationRecovery(); return end
+    print("Auto-Camera paused")
+    AUTO_ZOOM_PAUSED = true
 end
 
-function addon:exitStandBy()
-    print("Exiting Stand-By Mode")
-    STAND_BY = false
+function addon:resumeAutoZoom()
+    if self.settingsMigrationFailed then self:showMigrationRecovery(); return end
+    print("Auto-Camera resumed")
+    AUTO_ZOOM_PAUSED = false
     if addon:isRunning() then
         addon:autoZoom()
     end
 end
 
-function getAdjustment(frame) 
+local function getAdjustment(frame)
     frame:Show()
     local id = frame:GetModelFileID()
 
     if (id == nil) then
+        frame:Hide()
         return nil
     end
 
@@ -332,7 +317,7 @@ function getAdjustment(frame)
     return adjustment
 end
 
-function setAdjustment(frame, adjustment) 
+local function setAdjustment(frame, adjustment)
     frame:Show()
     local id = frame:GetModelFileID()
 
@@ -342,35 +327,53 @@ function setAdjustment(frame, adjustment)
     end
 
     settings.general.adjustments[id] = adjustment
+    addon:settingsChanged({"model:" .. id})
     frame:Hide()
 end
 
+function addon:getModelAdjustmentInfo(kind)
+    local frame = kind == "character" and T.playerModelFrame or T.playerMountModelFrame
+    if not frame then return nil, 0 end
+    if kind == "mount" and not IsMounted() then return nil, 0 end
+    local wasShown = frame:IsShown()
+    frame:Show()
+    local id = frame:GetModelFileID()
+    if not id or id == 0 then
+        if not wasShown then frame:Hide() end
+        return nil, 0
+    end
+    local default = kind == "character" and getCharacterZoomDefault() or getMountZoomDefault()
+    frame:SetShown(wasShown)
+    return id, default
+end
+
 function addon:autoZoom()
+    if self.settingsMigrationFailed then return end
     if (not addon:isRunning()) then
-        if (not STAND_BY_BEHAVIOR_HANDLED) then
+        if (not PAUSE_BEHAVIOR_HANDLED) then
             MoveViewInStop()
             MoveViewOutStop()
-            if STAND_BY then
-                if (settings.general.standByBehavior == "view") then
-                    SetView(settings.general.manualStandByView)
-                elseif (settings.general.standByBehavior == "maxDistance") then
+            if AUTO_ZOOM_PAUSED then
+                if (settings.general.pauseBehavior == "view") then
+                    SetView(settings.general.manualPauseView)
+                elseif (settings.general.pauseBehavior == "maxDistance") then
                     CameraZoomOut(maxZoomDistance)
                 end
             elseif IN_ENCOUNTER or HAS_CLIMBING_GEAR then
-                if (settings.general.standByBehavior == "view") then
+                if (settings.general.pauseBehavior == "view") then
                     SetView(settings.general.instanceEncounterView)
-                elseif (settings.general.standByBehavior == "maxDistance") then
+                elseif (settings.general.pauseBehavior == "maxDistance") then
                     CameraZoomOut(maxZoomDistance)
                 end
             elseif IN_PET_BATTLE then
-                if (settings.general.standByBehavior == "view") then
+                if (settings.general.pauseBehavior == "view") then
                     SetView(settings.general.petBattleView)
-                elseif (settings.general.standByBehavior == "maxDistance") then
+                elseif (settings.general.pauseBehavior == "maxDistance") then
                     CameraZoomOut(maxZoomDistance)
                 end
             end
     
-            STAND_BY_BEHAVIOR_HANDLED = true
+            PAUSE_BEHAVIOR_HANDLED = true
         end
 
         return
@@ -381,7 +384,7 @@ function addon:autoZoom()
     local unit
     local enemyCount = 0
 
-    STAND_BY_BEHAVIOR_HANDLED = false
+    PAUSE_BEHAVIOR_HANDLED = false
 
     local prevTargetZoom = targetZoom
     
@@ -475,605 +478,12 @@ function addon:storeActionCamSettings()
     end
 end
 
-local function viewOption()
-    return {
-        type = 'range',
-        min = 1,
-        max = 5,
-        step = 1
-    }
-end
-
-local function distanceOption()
-    return {
-        type = 'range',
-        min = 0,
-        max = maxZoomDistance,
-        step = 0.1,
-        order = 3
-    }
-end
-
-local function toggleGroupDefaultsOption(group)
-    return {
-        type = "execute",
-        name = function()
-            if (previousSettings.actionCamGroups[group] == nil) then
-                return "Defaults"
-            else
-                return "Undo"
-            end
-        end,
-        func = function()
-            addon:toggleActionCamGroupDefaults(group)
-        end,
-        order = 99,
-        desc = "Apply Blizzard defaults for this group"
-    }
-end
-
-function addon:toggleGeneralDefaults()
-    if (previousSettings.general == nil) then
-        previousSettings.general = T.deepCopy(settings.general)
-        T.deepMerge(settings.general, T.defaultSettings().general)
-    else
-        T.deepMerge(settings.general, previousSettings.general)
-        previousSettings.general = nil
-    end
-end
-
-function addon:toggleActionCamDefaults()
-    -- todo> motion sickness
-    if (previousSettings.actionCam == nil) then
-        previousSettings.actionCam = T.deepCopy(settings.actionCam)
-        T.deepMerge(settings.actionCam, T.defaultSettings().actionCam)
-    else
-        T.deepMerge(settings.actionCam, previousSettings.actionCam)
-        previousSettings.actionCam = nil
-    end
-    addon:applyActionCamSettings()
-end
-
-function addon:toggleActionCamGroupDefaults(group)
-    -- create list of CVar relevant to provided group
-    local actionCamGroupCVars = {}
-    for index, CVar in pairs(T.actionCamCVars) do
-        if (CVar:find(T.capitalize(group))) then
-            table.insert(actionCamGroupCVars, CVar)
-        end
-    end
-
-    if (previousSettings.actionCamGroups[group] == nil) then
-        -- store current group settings and apply defaults
-        previousSettings.actionCamGroups[group] = {}
-        for index, CVar in pairs(actionCamGroupCVars) do
-            previousSettings.actionCamGroups[group][CVar] = C_CVar.GetCVar(CVar)
-            settings.actionCam[CVar] = C_CVar.GetCVarDefault(CVar)
-        end
-    else
-        -- apply previous group settings and clear previous group settings storage
-        for index, CVar in pairs(actionCamGroupCVars) do
-            settings.actionCam[CVar] = previousSettings.actionCamGroups[group][CVar]
-        end
-        previousSettings.actionCamGroups[group] = nil
-    end
-    addon:applyActionCamSettings()
-end
-
 function addon:cameraCharacterCenteringEnabled()
     return C_CVar.GetCVar("CameraKeepCharacterCentered") == "1"
 end
 
 function addon:cameraCharacterCenteringDisabled()
-    return not addon:cameraCharacterCenteringEnabled()
-end
-
--- options
-function addon:options()
-    local options = {
-        type = 'group',
-        name = 'Auto-Camera',
-        childGroups = "tab",
-        args = {
-            general = {
-                type = 'group',
-                name = 'Zoom',
-                order = 1,
-                set = function(info, value)
-                    previousSettings.general = nil
-                    settings.general[info[#info]] = value
-                end,
-                get = function(info) return settings.general[info[#info]] end,
-                args = {
-                    standBy = {
-                        type = "group",
-                        inline = true,
-                        order = 1,
-                        name = "Stand-By Mode",
-                        args = {
-                            toggleStandBy = {
-                                type = "execute",
-                                name = function()
-                                    if (STAND_BY) then
-                                        return "Exit Stand-By"
-                                    else
-                                        return "Enter Stand-By"
-                                    end
-                                end,
-                                func = function() addon:toggleStandBy() end,
-                                order = 1
-                            },
-                            standByOnLoad = {
-                                type = "toggle",
-                                name = "Load In Stand-By",
-                                desc = "Controls if automatic camera zooming should be on stand-by on load",
-                                order = 2
-                            },
-                            standByKeybinding = {
-                                type = "keybinding",
-                                name = "Toggle Key Binding",
-                                desc = "Keybinding to toggle Stand-By Mode",
-                                get = function()
-                                    return GetBindingKey("TOGGLE_STAND_BY")
-                                end,
-                                set = function(info, value)
-                                    local toggleStandByKey = GetBindingKey("TOGGLE_STAND_BY")
-                                    if (toggleStandByKey) then
-                                        SetBinding(toggleStandByKey) -- unbind current key
-                                    end
-                                    SetBinding(value, "TOGGLE_STAND_BY") -- bind toggle to entered key
-                                    SaveBindings(2)
-                                end,
-                                order = 3
-                            },
-                            standByBehavior = {
-                                type = "select",
-                                name = "When Stand-By Is Activated",
-                                order = 4,
-                                values = {
-                                    view = "Zoom to view",
-                                    doNothing = "Do Nothing"
-                                },
-                                desc = "What the camera should do when Stand-By is activated"
-                            },
-                            spacer = {
-                                type = "header",
-                                name = "Stand-By Views",
-                                order = 5,
-                                hidden = function() return settings.general.standByBehavior ~= "view" end
-                            },
-                            manualStandByView = T.merge(viewOption(), {
-                                name = 'Manual Stand-By View',
-                                desc = 'The camera view to go to when toggling Auto-Camera off',
-                                order = 6,
-                                hidden = function() return settings.general.standByBehavior ~= "view" end
-                            }),
-                            instanceEncounterView = T.merge(viewOption(), {
-                                name = 'Instance Encounter View',
-                                desc = 'The camera view to go to during an encounter (e.g. boss battle)',
-                                order = 7,
-                                hidden = function() return settings.general.standByBehavior ~= "view" end
-                            }),
-                            petBattleView = T.merge(viewOption(), {
-                                name = 'Pet Battle View',
-                                desc = 'The camera view to go to during a pet battle.',
-                                order = 8,
-                                hidden = function() return settings.general.standByBehavior ~= "view" end
-                            })
-                        }
-                    },
-                    contextualDistances = {
-                        type = "group",
-                        inline = true,
-                        order = 3,
-                        name = "Contextual Camera Distances",
-                        args = {
-                            speedMultiplier = {
-                                type = 'range',
-                                name = 'Speed Multiplier',
-                                desc = 'Multiplier for additional zoom distance based on player speed',
-                                min = 0,
-                                max = 0.5,
-                                step = 0.01,
-                                order = 1
-                            },
-                            bossEnemyDistance = T.merge(distanceOption(), {
-                                name = 'Per Boss Enemy',
-                                desc = 'Distance to add per boss enemy on screen near the player character',
-                                order = 2
-                            })
-                        }
-                    },
-                    adjustments = {
-                        type = "group",
-                        inline = true,
-                        order = 4,
-                        name = "Adjustments",
-                        args = {
-                            character = {
-                                type = "group",
-                                name = "Character",
-                                args = {
-                                    distance = T.merge(distanceOption(), {
-                                        name = "Distance",
-                                        desc = "The zoom distance that should be used for the current character model.",
-                                        width = "double",
-                                        get = function()
-                                            return getAdjustment(T.playerModelFrame) or getCharacterZoomDefault()
-                                        end,
-                                        set = function(info, value)
-                                            if (value == getCharacterZoomDefault()) then
-                                                -- todo> test this case
-                                                setAdjustment(T.playerModelFrame, nil)
-                                            else
-                                                setAdjustment(T.playerModelFrame, value)
-                                            end
-                                        end,
-                                        order = 1
-                                    }),
-                                    toggle = {
-                                        type = "execute",
-                                        name = "Default",
-                                        func = function() settings.general.adjustments[T.playerModelFrame:GetModelFileID()] = nil end,
-                                        order = 2
-                                    }
-                                }
-                            },
-                            mount = {
-                                type = "group",
-                                name = "Mount",
-                                args = {
-                                    distance = T.merge(distanceOption(), {
-                                        name = "Distance",
-                                        desc = "The zoom distance that should be used for the current mount.",
-                                        width = "double",
-                                        get = function()
-                                            return getAdjustment(T.playerMountModelFrame) or getMountZoomDefault()
-                                        end,
-                                        set = function(info, value)
-                                            if (value == getMountZoomDefault()) then
-                                                setAdjustment(T.playerMountModelFrame, nil)
-                                            else
-                                                setAdjustment(T.playerMountModelFrame, value)
-                                            end
-                                        end,
-                                        order = 1
-                                    }),
-                                    toggle = {
-                                        type = "execute",
-                                        name = "Default",
-                                        func = function() settings.general.adjustments[T.playerMountModelFrame:GetModelFileID()] = nil end,
-                                        order = 2
-                                    }
-                                }
-                            }
-                            -- todo: overrideTargetModel = {}
-                            -- todo: overrideMountModel = {}
-                        }
-                    },
-                    toggleDefaults = {
-                        type = "execute",
-                        name = function()
-                            if (previousSettings.general == nil) then
-                                return "Defaults"
-                            else
-                                return "Undo"
-                            end
-                        end,
-                        func = function() addon:toggleGeneralDefaults() end,
-                        order = 100
-                    }
-                }
-            },
-            actionCam = {
-                type = 'group',
-                name = 'Action',
-                desc = 'Action Cam is an experimental feature included in the base game. This tab simply provides a convenient interface for configuration.',
-                order = 2,
-                set = function(info, value)
-                    previousSettings.actionCam = nil
-                    settings.actionCam[info[#info]] = value
-                end,
-                get = function(info) return settings.actionCam[info[#info]] end,
-                args = {
-                    general = {
-                        type = "group",
-                        inline = true,
-                        order = 1,
-                        name = "Related",
-                        args = {
-                            cameraKeepCharacterCentered = {
-                                name = "Keep Character Centered",
-                                type = "toggle",
-                                order = 1,
-                                width = "full",
-                                set = function(info, value)
-                                    C_CVar.SetCVar("CameraKeepCharacterCentered", value and "1" or "0")
-                                end,
-                                get = addon.cameraCharacterCenteringEnabled,
-                                desc = "Keep character centered in camera view. When enabled, Action Cam features will be disabled."
-                            },
-                            cameraReduceUnexpectedMovement = {
-                                name = "Reduce Camera Motion",
-                                type = "toggle",
-                                order = 1,
-                                width = "full",
-                                set = function(info, value)
-                                    C_CVar.SetCVar("CameraReduceUnexpectedMovement", value and "1" or "0")
-                                end,
-                                get = function() return C_CVar.GetCVar("CameraReduceUnexpectedMovement") == "1" end,
-                                desc = "Reduces various unexpted camera motion effects"
-                            },
-                            suppressExperimentalCVarPrompt = {
-                                type = "toggle",
-                                order = 2,
-                                width = "full",
-                                name = "Suppress Expirimental Feature Prompt",
-                                desc = "This will remove the warning on load when Action Cam is enabled."
-                            },
-                        }
-                    },
-                    overShoulder = {
-                        type = "group",
-                        name = "Over the Shoulder",
-                        order = 2,
-                        inline = true,
-                        hidden = addon.cameraCharacterCenteringEnabled,
-                        args = {
-                            [""] = {
-                                type = "range",
-                                name = "Over the Shoulder",
-                                max = 2,
-                                softMax = 2,
-                                min = -2,
-                                softMin = -2,
-                                width = "double"
-                            },
-                            toggleDefaults = toggleGroupDefaultsOption('overShoulder')
-                        }
-                    },
-                    motionSicknessMessage = {
-                        type = "group",
-                        name = "Action Cam Disabled",
-                        order = 3,
-                        inline = true,
-                        hidden = addon.cameraCharacterCenteringDisabled,
-                        args = {
-                            message1 = {
-                                type = "description",
-                                order = 1,
-                                name = "To enable Action Cam you must"
-                            },
-                            message2 = {
-                                type = "execute",
-                                order = 2,
-                                width = "double",
-                                name = "Disable Character Centering",
-                                func = function()
-                                    C_CVar.SetCVar("CameraKeepCharacterCentered", "0")
-                                    addon:applyActionCamSettings()
-                                end
-                            },
-                            message3 = {
-                                type = "description",
-                                order = 3,
-                                name = "which is enabled by default to prevent motion sickness in some users. This setting can also be toggled in the General section above or with Options > Game > Accessibility > General > Motion Sickness."
-                            }
-                        }
-                    },
-                    dynamicPitch = {
-                        type = "group",
-                        name = "Dynamic Pitch",
-                        hidden = addon.cameraCharacterCenteringEnabled,
-                        inline = true,
-                        order = 3,
-                        args = {
-                            [""] = {
-                                type = "toggle",
-                                name = "Dynamic Pitch",
-                                order = 1
-                            },
-                            baseFovPad = {
-                                name = "Base FoV Pad",
-                                order = 2,
-                                step = 0.01,
-                                softMax = 0.99,
-                                min = 0.01,
-                                softMin = 0.01
-                            },
-                            baseFovPadFlying = {
-                                name = "Flying Base FoV Pad",
-                                step = 0.01,
-                                softMax = 0.99,
-                                min = 0.01,
-                                softMin = 0.01
-                            },
-                            baseFovPadDownScale = {
-                                name = "Base FoV Down Scale",
-                                step = 0.01,
-                                softMax = 0.99
-                            },
-                            smartPivotCutoffDist = {
-                                name = "Smart Pivot Cutoff Distance",
-                                step = 0.01,
-                                softMax = 50,
-                                max = 50,
-                            },
-                            toggleDefaults = toggleGroupDefaultsOption('dynamicPitch')
-                        }
-                    },
-                    headMovement = {
-                        type = "group",
-                        name = "Head Movement",
-                        hidden = addon.cameraCharacterCenteringEnabled,
-                        inline = true,
-                        order = 4,
-                        args = {
-                            strength = {
-                                order = 1,
-                                softMax = 4
-                            },
-                            standingStrength = {
-                                order = 2,
-                                softMax = 4
-                            },
-                            movingStrength = {
-                                order = 3,
-                                softMax = 4
-                            },
-                            firstPersonDampRate = {
-                                order = 4,
-                                min = 1,
-                                softMax = 50
-                            },
-                            standingDampRate = {
-                                order = 5,
-                                min = 1,
-                                softMax = 50
-                            },
-                            movingDampRate = {
-                                order = 6,
-                                min = 1,
-                                softMax = 50
-                            },
-                            deadZone = {
-                                order = 7,
-                                softMax = 50,
-                                desc = "This option doesn't apply immediately (possibly a bug in the base game), but mounting or reloading will trigger application",
-                            },
-                            rangeScale = {
-                                order = 8,
-                                softMax = 50,
-                            },
-                            toggleDefaults = toggleGroupDefaultsOption('headMovement')
-                        }
-                    },
-                    targetFocus = {
-                        type = "group",
-                        name = "Target Focus",
-                        hidden = addon.cameraCharacterCenteringEnabled,
-                        inline = true,
-                        order = 5,
-                        args = {
-                            enemyEnable = {
-                                order = 1,
-                                type = "toggle"
-                            },
-                            enemyStrengthPitch = {
-                                order = 2,
-                                softMax = 1,
-                            },
-                            enemyStrengthYaw = {
-                                order = 3,
-                                softMax = 1,
-                            },
-                            interactEnable = {
-                                order = 4,
-                                type = "toggle"
-                            },
-                            interactStrengthPitch = {
-                                order = 5,
-                                softMax = 1,
-                            },
-                            interactStrengthYaw = {
-                                order = 6,
-                                softMax = 1,
-                            },
-                            toggleDefaults = toggleGroupDefaultsOption('targetFocus')
-                        }
-                    },
-                    toggleDefaults = {
-                        type = "execute",
-                        name = function()
-                            if (previousSettings.actionCam == nil) then
-                                return "Defaults"
-                            else
-                                return "Undo"
-                            end
-                        end,
-                        hidden = addon.cameraCharacterCenteringEnabled,
-                        func = function() addon:toggleActionCamDefaults() end,
-                        order = 99
-                    }
-                }
-            }
-        }
-    }
-    
-    local actionCamArgs = options.args.actionCam.args
-
-    -- actionCam CVars
-    for index, cVar in pairs(T.actionCamCVars) do
-        local groupName = nil
-        for group, setting in pairs(actionCamArgs) do
-            if (strfind(cVar, T.capitalize(group)) ~= nil) then
-                groupName = group
-                break
-            end
-        end
-
-        if (groupName == nil) then
-            groupName = "general"
-        end
-
-        local var = T.unCapitalize(cVar:gsub("test_camera", ""):gsub(T.capitalize(groupName), ""))
-        local name = T.capitalize(T.splitCamelCase(var == "" and groupName or var))
-        local CVar = 'test_camera' .. T.capitalize(groupName:gsub("general", "")) .. T.capitalize(var)
-        local default = C_CVar.GetCVarDefault(CVar)
-        local CVarIsNumeric = tonumber(default) ~= nil
-        local optionType = actionCamArgs[groupName].args[var] and actionCamArgs[groupName].args[var].type or CVarIsNumeric and "range" or "input"
-        local rangeMin = type == "range" and 0 or nil
-        local rangeMax = nil
-        if (optionType == "range") then
-            rangeMax = T.getOrderOfMagnitude(tonumber(default ~= "0" and default or 0.1)) * 10
-        end
-        local bigStep = nil
-        if (optionType == "range") then
-            bigStep = rangeMax / 100
-        end
-
-        actionCamArgs[groupName].args[var] = T.deepMerge(
-            {
-                name = name,
-                type = optionType,
-                softMin = rangeMin,
-                softMax = rangeMax,
-                bigStep = bigStep,
-                order = 50,
-                hidden = addon.cameraCharacterCenteringEnabled,
-                get = function(info)
-                    local value = C_CVar.GetCVar(CVar)
-                    if (info.type == 'toggle') then
-                        return value == "1" and true or false
-                    elseif (info.type == 'range') then
-                        return tonumber(value)
-                    else
-                    return value
-                    end
-                end,
-                set = function(info, value)
-                    local CVar = 'test_camera' .. T.capitalize(groupName:gsub("general", "")) .. T.capitalize(info[#info])
-                    
-                    if (type(value) == 'boolean') then
-                        value = value and 1 or 0 -- convert to string
-                    end
-
-                    C_CVar.SetCVar(CVar, value)
-                    settings.actionCam[CVar] = value
-                    previousSettings.actionCam = nil
-                    previousSettings.actionCamGroups[groupName] = nil
-                end,
-            },
-            actionCamArgs[groupName].args[var] or {}
-        )
-    end
-
-    -- stand by behavior
-    if (xpac >= xpacs.sl) then
-        options.args.general.args.standBy.args.standByBehavior.values.maxDistance = "Zoom to max distance"
-    end
-
-    return options
+    return not self:cameraCharacterCenteringEnabled()
 end
 
 -- -- data
@@ -1113,15 +523,18 @@ local colorStart = "\124"
 local colorEnd = "\124r"
 SLASH_AC1 = "/ac"
 SlashCmdList["AC"] = function(arg)
+    if addon.settingsMigrationFailed then
+        addon:showMigrationRecovery()
+        return
+    end
     if arg == "toggle" then
-        addon:toggleStandBy()
-    elseif (arg == "standby") then
-        addon:enterStandBy()
+        addon:toggleAutoZoom()
+    elseif (arg == "pause" or arg == "standby" or arg == "stand-by") then
+        addon:pauseAutoZoom()
     elseif (arg == "resume") then
-        addon:exitStandBy()
+        addon:resumeAutoZoom()
     elseif (arg == "settings" or arg == "options") then
-        SettingsPanel:Open()
-        InterfaceOptionsFrame_OpenToCategory("Auto-Camera")
+        Settings.OpenToCategory(addon.settingsCategory:GetID())
     elseif (arg == "debug") then
         print(T.findAuraByName("Rock Climbing Gear", "player"))
     -- print(T.playerMountModelFrame:GetModelFileID())
@@ -1149,15 +562,16 @@ SlashCmdList["AC"] = function(arg)
         -- end
     else
         print(colorStart .. yellow .. "Auto-Camera console commands:" .. colorEnd)
-        print("/ac toggle       " .. colorStart .. yellow .. "toggles stand-by mode on/off" .. colorEnd)
-        print("/ac standby    " .. colorStart .. yellow .. "enters stand-by mode" .. colorEnd)
-        print("/ac resume     " .. colorStart .. yellow .. "exits stand-by mode" .. colorEnd)
+        print("/ac toggle       " .. colorStart .. yellow .. "toggles pause on/off" .. colorEnd)
+        print("/ac pause        " .. colorStart .. yellow .. "pauses auto-zoom (aliases: standby, stand-by)" .. colorEnd)
+        print("/ac resume       " .. colorStart .. yellow .. "resumes auto-zoom" .. colorEnd)
         print("/ac settings    " .. colorStart .. yellow .. "opens Auto-Camera settings" .. colorEnd)
     end
 end
 
 -- events
 local function OnEvent(self, event, ...)
+    if addon.settingsMigrationFailed then return end
     addon[event](self, event, ...)
 end
 
@@ -1328,7 +742,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
 
     -- Shared debounce logic: locks the context frame at the start of an adjustment so
     -- that a mount/dismount during the debounce window doesn't misattribute the adjustment.
-    -- Adjustments are not saved when auto-zoom is in stand-by mode or during encounters.
+    -- Adjustments are not saved when auto-zoom is paused or during encounters.
     local function handleZoomInput(frame)
         if not IS_ADJUSTING then
             IS_ADJUSTING = true
@@ -1340,7 +754,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            if not STAND_BY and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
+            if not AUTO_ZOOM_PAUSED and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
                 setAdjustment(adjustmentFrame, GetCameraZoom())
             end
             adjustmentFrame = nil
@@ -1363,7 +777,7 @@ function addon:ADDON_LOADED(_, loadedAddonName)
         scrollDebounceTimer = addon:ScheduleTimer(function()
             IS_ADJUSTING = false
             scrollDebounceTimer = nil
-            if not STAND_BY and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
+            if not AUTO_ZOOM_PAUSED and not IN_ENCOUNTER and not IN_PET_BATTLE and not HAS_CLIMBING_GEAR then
                 setAdjustment(adjustmentFrame, GetCameraZoom())
             end
             adjustmentFrame = nil
@@ -1434,13 +848,13 @@ function addon:ADDON_LOADED(_, loadedAddonName)
 
     updateZoomKeyBindings()
 
-    if (not STAND_BY) then
+    if (not AUTO_ZOOM_PAUSED) then
         addon:autoZoom()
     end
 end
 
 function addon:UNIT_MODEL_CHANGED()
-    LibStub("AceConfigRegistry-3.0"):NotifyChange("Auto-Camera")
+    addon:refreshSettings()
 end
 
 function addon:evaluateHasClimbingGear()
