@@ -857,10 +857,6 @@ function addon:ADDON_LOADED(_, loadedAddonName)
     end
 end
 
-function addon:UNIT_MODEL_CHANGED()
-    addon:refreshSettings()
-end
-
 function addon:evaluateHasClimbingGear()
     if (T.findAuraByName("Rock Climbing Gear", "player") ~= nil) then
         HAS_CLIMBING_GEAR = true
@@ -886,7 +882,6 @@ for event in pairs(classicEvents) do
     f:RegisterEvent(event)
 end
 
-f:RegisterUnitEvent("UNIT_MODEL_CHANGED", "player")
 f:RegisterUnitEvent("UNIT_AURA", "player")
 
 if (xpac >= xpacs.wolc) then

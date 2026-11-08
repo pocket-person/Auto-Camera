@@ -64,31 +64,83 @@ function T.setupSettingsPanel(addon)
     local zoomCategory, layout = Settings.RegisterVerticalLayoutSubcategory(category, "Auto Zoom")
     local actionCategory, actionLayout = Settings.RegisterVerticalLayoutSubcategory(category, "Action Camera")
     addon.settingsCategory = category
-    local variables, owned, watchedCVars = {}, {}, {}
+    local variables, owned, watchedCVars, watchedByName = {}, {}, {}, {}
     local zoomEntries, actionEntries = {}, {}
+    -- Initializer sets used to refresh only the frames affected by a change.
+    local resetButtons, centeringDependents, modelControls = {}, {}, {}
+    local modelVariables = {}
     local defaults = T.defaultSettings()
     local reset
 
+    local function refreshFrames(filter)
+        if not SettingsPanel:IsShown() then return end
+        SettingsPanel:GetSettingsList().ScrollBox:ForEachFrame(function(frame)
+            local initializer = frame:GetElementData()
+            if owned[initializer] and (not filter or filter(initializer)) then
+                if frame.EvaluateState then frame:EvaluateState() end
+                if frame.EvaluateName and frame.Button then
+                    frame.Button:SetText(frame:EvaluateName())
+                end
+            end
+        end)
+    end
+
+    -- Refreshes reset buttons when Undo snapshots were discarded, plus any dependent controls.
+    local function refreshAffected(undoChanged, dependents)
+        if not undoChanged and not dependents then return end
+        refreshFrames(function(initializer)
+            return (undoChanged and resetButtons[initializer]) or (dependents and dependents[initializer])
+        end)
+    end
+
+    -- Model IDs and default distances require showing model frames, so cache them until the model changes.
+    local modelInfoCache = {}
+    local function modelInfo(kind)
+        local info = modelInfoCache[kind]
+        if info then return info.id, info.default end
+        local id, default = addon:getModelAdjustmentInfo(kind)
+        if id then modelInfoCache[kind] = {id = id, default = default} end
+        return id, default
+    end
+
+    local function refreshModels()
+        wipe(modelInfoCache)
+        for _, variable in ipairs(modelVariables) do Settings.NotifyUpdate(variable) end
+        refreshFrames(function(initializer) return modelControls[initializer] end)
+    end
+
     function addon:refreshSettings()
+        wipe(modelInfoCache)
         for cvar, watch in pairs(watchedCVars) do watch.value = C_CVar.GetCVar(cvar) end
         for _, variable in ipairs(variables) do Settings.NotifyUpdate(variable) end
-        if SettingsPanel:IsShown() then
-            SettingsPanel:GetSettingsList().ScrollBox:ForEachFrame(function(frame)
-                local initializer = frame:GetElementData()
-                if owned[initializer] then
-                    if frame.EvaluateState then frame:EvaluateState() end
-                    if frame.EvaluateName and frame.Button then
-                        frame.Button:SetText(frame:EvaluateName())
-                    end
-                end
-            end)
-        end
+        refreshFrames()
     end
 
     reset = T.createSettingsResetManager(function() addon:refreshSettings() end)
     function addon:settingsChanged(keys)
-        reset:invalidate(keys)
-        self:refreshSettings()
+        local undoChanged = reset:invalidate(keys)
+        for _, key in ipairs(keys) do
+            if key:sub(1, 6) ~= "model:" then return self:refreshSettings() end
+        end
+        for _, variable in ipairs(modelVariables) do Settings.NotifyUpdate(variable) end
+        refreshAffected(undoChanged)
+    end
+
+    -- CVAR_UPDATE fires synchronously, so suppress it for our own writes.
+    local writingCVar = false
+    local function writeCVar(cvar, value)
+        writingCVar = true
+        local ok, err = pcall(C_CVar.SetCVar, cvar, value)
+        writingCVar = false
+        if not ok then error(err, 0) end
+        local watch = watchedCVars[cvar]
+        if watch then watch.value = C_CVar.GetCVar(cvar) end
+    end
+
+    local function watchCVar(cvar, variable, key, dependents)
+        local watch = {cvar = cvar, value = C_CVar.GetCVar(cvar), variable = variable, key = key, dependents = dependents}
+        watchedCVars[cvar] = watch
+        watchedByName[cvar:lower()] = watch
     end
 
     local function own(initializer, ...)
@@ -101,15 +153,16 @@ function T.setupSettingsPanel(addon)
         targetLayout:AddInitializer(CreateSettingsListSectionHeaderInitializer(name))
     end
 
-    local function proxy(targetCategory, key, name, variableType, default, get, set, scope)
+    local function proxy(targetCategory, key, name, variableType, default, get, set, scope, dependents)
         local variable = "AUTO_CAMERA_" .. key
         local setting = Settings.RegisterProxySetting(targetCategory, variable, variableType, name, default, get, function(value)
-            if scope then reset:invalidate({type(scope) == "function" and scope() or scope}) end
+            -- Blizzard notifies this setting after the write; only refresh what depends on it.
+            local undoChanged = scope and reset:invalidate({type(scope) == "function" and scope() or scope})
             set(value)
-            addon:refreshSettings()
+            refreshAffected(undoChanged, dependents)
         end)
         variables[#variables + 1] = variable
-        return setting
+        return setting, variable
     end
 
     local function slider(targetCategory, setting, tooltip, min, max, step)
@@ -136,6 +189,8 @@ function T.setupSettingsPanel(addon)
         own(initializer, name, "defaults", "reset", "undo")
         if canModify then initializer:AddModifyPredicate(canModify) end
         targetLayout:AddInitializer(initializer)
+        resetButtons[initializer] = true
+        return initializer
     end
 
     local function zoomSetting(key, name, variableType)
@@ -195,36 +250,38 @@ function T.setupSettingsPanel(addon)
     for _, kind in ipairs({"character", "mount"}) do
         local label = kind == "character" and "Current Character" or "Current Mount"
         local function modelDefault()
-            local _, value = addon:getModelAdjustmentInfo(kind)
+            local _, value = modelInfo(kind)
             return value
         end
-        local function available() return addon:getModelAdjustmentInfo(kind) ~= nil end
+        local function available() return modelInfo(kind) ~= nil end
         local function modelScope()
-            local id = addon:getModelAdjustmentInfo(kind)
+            local id = modelInfo(kind)
             return "model:" .. tostring(id)
         end
-        local setting = proxy(zoomCategory, kind:upper() .. "_DISTANCE", label .. " Distance", Settings.VarType.Number,
+        local setting, variable = proxy(zoomCategory, kind:upper() .. "_DISTANCE", label .. " Distance", Settings.VarType.Number,
             modelDefault, function()
-                local id, default = addon:getModelAdjustmentInfo(kind)
+                local id, default = modelInfo(kind)
                 return (id and addon.db.global.general.adjustments[id]) or default
             end, function(value)
-                local id, default = addon:getModelAdjustmentInfo(kind)
+                local id, default = modelInfo(kind)
                 if id then
                     addon.db.global.general.adjustments[id] = value ~= default and value or nil
                 end
             end, modelScope)
+        modelVariables[#modelVariables + 1] = variable
         local control = slider(zoomCategory, setting,
             "Zoom distance for the current model. Available once the model is loaded; mount distance requires a mount. Defaults removes the saved override.", 0, 50, 0.1)
         control:AddModifyPredicate(available)
-        resetButton(layout, label .. " Distance", modelScope, function()
-            local id = addon:getModelAdjustmentInfo(kind)
+        modelControls[control] = true
+        modelControls[resetButton(layout, label .. " Distance", modelScope, function()
+            local id = modelInfo(kind)
             return {{
                 key = modelScope(),
                 get = function() return addon.db.global.general.adjustments[id] end,
                 set = function(value) addon.db.global.general.adjustments[id] = value end,
                 reset = function() addon.db.global.general.adjustments[id] = nil end
             }}
-        end, available)
+        end, available)] = true
     end
     resetButton(layout, "Auto Zoom", "zoom", function() return zoomEntries end)
 
@@ -237,10 +294,11 @@ function T.setupSettingsPanel(addon)
         if C_CVar.GetCVarDefault(cvar) ~= nil then
             local function get() return C_CVar.GetCVar(cvar) == "1" end
             -- Accessibility preferences are shared with Blizzard and are not reset here.
-            local setting = proxy(actionCategory, cvar:upper(), info[2], Settings.VarType.Boolean, get, get,
-                function(value) C_CVar.SetCVar(cvar, value and "1" or "0") end)
+            local dependents = cvar == "CameraKeepCharacterCentered" and centeringDependents or nil
+            local setting, variable = proxy(actionCategory, cvar:upper(), info[2], Settings.VarType.Boolean, get, get,
+                function(value) writeCVar(cvar, value and "1" or "0") end, nil, dependents)
             own(Settings.CreateCheckbox(actionCategory, setting, info[3]), info[3], "motion sickness", "accessibility")
-            watchedCVars[cvar] = {value = C_CVar.GetCVar(cvar)}
+            watchCVar(cvar, variable, nil, dependents)
         end
     end
     local promptKey = "action:suppressExperimentalCVarPrompt"
@@ -287,10 +345,10 @@ function T.setupSettingsPanel(addon)
                 local function set(value)
                     local stored = type(value) == "boolean" and (value and "1" or "0") or tostring(value)
                     addon.db.global.actionCam[cvar] = stored
-                    C_CVar.SetCVar(cvar, stored)
+                    writeCVar(cvar, stored)
                 end
                 local scope = "cvar:" .. cvar
-                local setting = proxy(actionCategory, cvar:upper(), name, variableType, convert(default), get, set, scope)
+                local setting, variable = proxy(actionCategory, cvar:upper(), name, variableType, convert(default), get, set, scope)
                 local control
                 if isBoolean then
                     control = own(Settings.CreateCheckbox(actionCategory, setting, tooltip), tooltip)
@@ -309,6 +367,7 @@ function T.setupSettingsPanel(addon)
                 control:AddSearchTags("actioncam", "action cam", "Action Camera", section.name, cvar, tooltip)
                 control:AddModifyPredicate(function() return addon:cameraCharacterCenteringDisabled() end)
                 control:AddEvaluateStateCVar("CameraKeepCharacterCentered")
+                centeringDependents[control] = true
                 entries[#entries + 1] = {
                     key = scope,
                     get = function()
@@ -320,39 +379,42 @@ function T.setupSettingsPanel(addon)
                     end,
                     reset = function() set(convert(C_CVar.GetCVarDefault(cvar))) end
                 }
-                watchedCVars[cvar] = {value = C_CVar.GetCVar(cvar), key = scope}
+                watchCVar(cvar, variable, scope)
             end
         end
         if #entries > 0 then
             append(actionEntries, entries)
-            resetButton(actionLayout, section.name, "action:" .. section.key, function() return entries end,
-                function() return addon:cameraCharacterCenteringDisabled() end)
+            centeringDependents[resetButton(actionLayout, section.name, "action:" .. section.key, function() return entries end,
+                function() return addon:cameraCharacterCenteringDisabled() end)] = true
         end
     end
-    resetButton(actionLayout, "Action Camera", "action", function() return actionEntries end,
-        function() return addon:cameraCharacterCenteringDisabled() end)
+    centeringDependents[resetButton(actionLayout, "Action Camera", "action", function() return actionEntries end,
+        function() return addon:cameraCharacterCenteringDisabled() end)] = true
 
     local frame = CreateFrame("Frame")
     frame:RegisterEvent("CVAR_UPDATE")
     frame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    frame:RegisterEvent("UNIT_MODEL_CHANGED")
+    frame:RegisterUnitEvent("UNIT_MODEL_CHANGED", "player")
     frame:SetScript("OnEvent", function(_, event, name)
         if reset.applying then return end
         if event == "CVAR_UPDATE" then
-            local changed = {}
-            for cvar, watch in pairs(watchedCVars) do
-                if C_CVar.GetCVar(cvar) ~= watch.value and watch.key then changed[#changed + 1] = watch.key end
-            end
-            reset:invalidate(changed)
-        end
-        if event == "CVAR_UPDATE" then
-            addon:refreshSettings()
+            if writingCVar then return end
+            local watch = type(name) == "string" and watchedByName[name:lower()]
+            if not watch then return end
+            local value = C_CVar.GetCVar(watch.cvar)
+            if value == watch.value then return end
+            watch.value = value
+            local undoChanged = watch.key and reset:invalidate({watch.key})
+            Settings.NotifyUpdate(watch.variable)
+            refreshAffected(undoChanged, watch.dependents)
         else
+            wipe(modelInfoCache)
             -- Model owners update their frames during these same events.
-            C_Timer.After(0, function() addon:refreshSettings() end)
+            C_Timer.After(0, refreshModels)
         end
     end)
+    SettingsPanel:HookScript("OnShow", function() wipe(modelInfoCache) end)
     EventRegistry:RegisterCallback("Settings.CategoryDefaulted", function(_, defaultedCategory)
         local entries = defaultedCategory == zoomCategory and zoomEntries or
             (defaultedCategory == actionCategory and actionEntries)

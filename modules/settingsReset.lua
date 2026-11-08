@@ -4,7 +4,9 @@ function T.createSettingsResetManager(onChange)
     local snapshots = {}
     local manager = {}
 
+    -- Returns true when at least one Undo snapshot was discarded.
     function manager:invalidate(keys)
+        local invalidated = false
         for scope, snapshot in pairs(snapshots) do
             for _, key in ipairs(keys) do
                 for savedKey in pairs(snapshot.keys) do
@@ -12,11 +14,13 @@ function T.createSettingsResetManager(onChange)
                         (key == "models" and savedKey:sub(1, 6) == "model:") or
                         (savedKey == "models" and key:sub(1, 6) == "model:") then
                         snapshots[scope] = nil
+                        invalidated = true
                         break
                     end
                 end
             end
         end
+        return invalidated
     end
 
     function manager:canUndo(scope)
