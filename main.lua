@@ -245,12 +245,16 @@ end
 -- addon hook callback functions
 function addon:OnInitialize()
     -- Migrate raw data before AceDB injects defaults into the old layout.
-    local success, candidate = T.prepareSavedSettings(AutoCameraDB)
+    local success, reason = pcall(function()
+        AutoCameraDB = AutoCameraDB or {}
+        AutoCameraDB.global = AutoCameraDB.global or {}
+        T.migrateSettings(AutoCameraDB.global)
+    end)
     if not success then
-        T.setupMigrationRecovery(self, candidate)
-        return
+        AutoCameraDB = {}
+        print("Auto-Camera failed to migrate existing configuration. Defaults have been restored.")
+        print("Auto-Camera: " .. tostring(reason))
     end
-    AutoCameraDB = candidate
     addon.db = LibStub("AceDB-3.0"):New("AutoCameraDB", {global = T.defaultSettings()}, true)
     addon:loadSettings()
     T.setupSettingsPanel(addon)

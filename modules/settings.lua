@@ -118,6 +118,7 @@ function T.migrateSettings(settings)
   return settings
 end
 
+-- Deferred validation and interactive recovery; startup currently resets on migration errors.
 local function validateSettings(settings)
   assert(type(settings) == "table", "Auto-Camera: saved global settings must be a table")
   local defaults = T.defaultSettings()

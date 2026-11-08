@@ -20,7 +20,7 @@ A World of Warcraft addon that augments the camera's functionality and control.
 /ac settings&nbsp&nbsp&nbspopens Auto-Camera settings<br/>
 
 <h2>Config Migration Recovery</h2>
-Migration is validated on a copy before the saved database is changed. If it fails, Auto-Camera stops, reports the error in chat, and offers the option to reset to defaults, or disable the addon.<br/>
+Auto-Camera attempts migration before initializing AceDB. If migration fails, the saved addon config is discarded, defaults are restored, and a notice and error details are printed in chat. Startup then continues as a fresh installation. Additional validation and interactive recovery remain in the source but are disabled pending future testing.<br/>
 
 <h2>Local Flavor Testing</h2>
 The base <code>Auto-Camera.toc</code> is generated locally and ignored by Git. To select a flavor for live testing, run:
