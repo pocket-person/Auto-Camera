@@ -1,12 +1,18 @@
 {
   "folders": [
-	{
-		"path": "."
-	},
-	{
-		"path": "../../../BlizzardInterfaceCode"
-	}
-],
+    {
+      "path": "."
+    },
+    {
+      "path": "../../../BlizzardInterfaceCode"
+    },
+    {
+      "path": "../../../../_forever_/Interface/AddOns/Auto-Camera"
+    },
+    {
+      "path": "../../../../_forever_/BlizzardInterfaceCode"
+    }
+  ],
   "settings": {
     "Lua.runtime.version": "Lua 5.1",
     "Lua.runtime.builtin": {
